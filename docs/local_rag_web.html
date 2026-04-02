@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local RAG Web</title>
+  <style>
+    :root {
+      --bg: #f3f7ff;
+      --card: #ffffff;
+      --line: #d4deea;
+      --text: #10233a;
+      --muted: #5a6d86;
+      --primary: #0f6fff;
+      --primary-2: #0050cc;
+      --ok: #0a7a37;
+      --warn: #b15a00;
+      --err: #c72727;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 10%, #e8f1ff 0%, #f3f7ff 45%, #fbfdff 100%);
+      color: var(--text);
+      font: 14px/1.5 "Segoe UI", Arial, sans-serif;
+    }
+    .wrap {
+      max-width: 1080px;
+      margin: 22px auto;
+      padding: 0 14px 28px;
+    }
+    h1 { margin: 0 0 6px; }
+    .sub { margin: 0 0 14px; color: var(--muted); }
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 1.1fr 1fr;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      box-shadow: 0 8px 22px rgba(15, 36, 74, 0.06);
+    }
+    .card h2 { margin: 0 0 10px; font-size: 16px; }
+    .row {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 1fr;
+      margin-bottom: 10px;
+    }
+    .row.single { grid-template-columns: 1fr; }
+    label {
+      display: block;
+      margin-bottom: 4px;
+      color: #244266;
+      font-weight: 600;
+    }
+    input, select, textarea, button {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font: inherit;
+      color: var(--text);
+      background: #fff;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .btns {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, minmax(120px, 1fr));
+    }
+    .btns2 {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(120px, 1fr));
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    .primary:hover {
+      background: var(--primary-2);
+      border-color: var(--primary-2);
+    }
+    .ghost { background: #f8fbff; }
+    .status {
+      margin-top: 8px;
+      border-radius: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      background: #f9fbff;
+      white-space: pre-wrap;
+    }
+    .status.ok { color: var(--ok); border-color: #b9e6cb; background: #f1fbf5; }
+    .status.warn { color: var(--warn); border-color: #ffd8b0; background: #fff8f0; }
+    .status.err { color: var(--err); border-color: #f4b9b9; background: #fff3f3; }
+    .mono {
+      margin: 0;
+      padding: 10px;
+      border-radius: 10px;
+      background: #0f1c2e;
+      color: #d6e3ff;
+      max-height: 340px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font: 12px/1.45 Consolas, "Courier New", monospace;
+    }
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-left: 6px;
+      font-size: 12px;
+      background: #f5f9ff;
+      color: #2a4e84;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Local RAG Web</h1>
+    <p class="sub">Local HTML frontend. LLM direct is available; RAG uses local backend <code>/api/chat</code>.</p>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Connection & Mode</h2>
+        <div class="row">
+          <div>
+            <label for="baseUrl">LLM Base URL</label>
+            <input id="baseUrl" value="http://127.0.0.1:9001" />
+          </div>
+          <div>
+            <label for="backendUrl">RAG Backend URL</label>
+            <input id="backendUrl" value="http://127.0.0.1:8787" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="provider">Provider</label>
+            <select id="provider">
+              <option value="vllm">vLLM</option>
+              <option value="openai">OpenAI</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div>
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="llm_direct">LLM Direct</option>
+              <option value="rag">RAG</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="apiKey">API Key</label>
+            <input id="apiKey" value="EMPTY" />
+          </div>
+          <div>
+            <label for="model">Model</label>
+            <input id="model" placeholder="Use Test/Refresh model first" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="collection">retrieval.collection</label>
+            <input id="collection" value="winddata_bge_m3_bm25" />
+          </div>
+          <div>
+            <label for="topK">retrieval.top_k</label>
+            <input id="topK" type="number" min="1" max="20" value="4" />
+          </div>
+        </div>
+
+        <div class="btns">
+          <button id="btnPing" class="primary">Test LLM</button>
+          <button id="btnModels" class="ghost">Refresh Models</button>
+          <button id="btnSave" class="ghost">Save Config</button>
+        </div>
+        <div id="connStatus" class="status">Waiting for connection test...</div>
+        <div style="margin-top:8px">
+          <pre class="mono">ssh -L 9001:127.0.0.1:8001 -J lijiyao@172.30.3.166 lijiyao@gpu6000</pre>
+          <pre class="mono">ssh -L 19530:127.0.0.1:19530 -J lijiyao@172.30.3.166 lijiyao@gpu6000</pre>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Generation Inputs</h2>
+        <div class="row">
+          <div>
+            <label for="temperature">temperature</label>
+            <input id="temperature" type="number" step="0.1" min="0" max="2" value="0.2" />
+          </div>
+          <div>
+            <label for="maxTokens">max_tokens</label>
+            <input id="maxTokens" type="number" min="1" max="8192" value="768" />
+          </div>
+        </div>
+
+        <div class="row single">
+          <div>
+            <label for="systemPrompt">System Prompt</label>
+            <textarea id="systemPrompt">You are a rigorous assistant. Use context when available and clearly state uncertainty when context is insufficient.</textarea>
+          </div>
+        </div>
+        <div class="row single">
+          <div>
+            <label for="userPrompt">User Prompt</label>
+            <textarea id="userPrompt" placeholder="Type your question..."></textarea>
+          </div>
+        </div>
+
+        <div class="btns2">
+          <button id="btnSend" class="primary">Send</button>
+          <button id="btnSimRag" class="ghost">Simulate RAG Payload</button>
+        </div>
+        <div id="runStatus" class="status">Waiting for request...</div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:12px;">
+      <h2>Answer <span id="latency" class="pill">Latency: --</span></h2>
+      <pre id="answerBox" class="mono">No output yet.</pre>
+    </section>
+
+    <section class="card" style="margin-top:12px;">
+      <h2>Unified Request Payload (Debug)</h2>
+      <pre id="payloadBox" class="mono">{}</pre>
+    </section>
+
+    <section class="card" style="margin-top:12px;">
+      <h2>RAG contexts / metrics</h2>
+      <pre id="ragBox" class="mono">No output yet.</pre>
+    </section>
+
+    <section class="card" style="margin-top:12px;">
+      <h2>Related Images / Tables</h2>
+      <div id="previewBox" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;"></div>
+    </section>
+  </div>
+
+  <script>
+    "use strict";
+
+    const STORE_KEY = "local_rag_web_config_v2";
+    const $ = (id) => document.getElementById(id);
+    const refs = {
+      baseUrl: $("baseUrl"),
+      backendUrl: $("backendUrl"),
+      provider: $("provider"),
+      mode: $("mode"),
+      apiKey: $("apiKey"),
+      model: $("model"),
+      collection: $("collection"),
+      topK: $("topK"),
+      temperature: $("temperature"),
+      maxTokens: $("maxTokens"),
+      systemPrompt: $("systemPrompt"),
+      userPrompt: $("userPrompt"),
+      connStatus: $("connStatus"),
+      runStatus: $("runStatus"),
+      answerBox: $("answerBox"),
+      payloadBox: $("payloadBox"),
+      ragBox: $("ragBox"),
+      previewBox: $("previewBox"),
+      latency: $("latency")
+    };
+
+    function setStatus(el, text, kind) {
+      el.className = "status " + (kind || "");
+      el.textContent = text;
+    }
+
+    function trimSlash(v) {
+      return (v || "").trim().replace(/\/+$/, "");
+    }
+
+    function buildUnifiedPayload() {
+      return {
+        mode: refs.mode.value,
+        provider: refs.provider.value,
+        model: refs.model.value.trim(),
+        messages: [
+          { role: "system", content: refs.systemPrompt.value.trim() },
+          { role: "user", content: refs.userPrompt.value.trim() }
+        ],
+        generation_config: {
+          temperature: Number(refs.temperature.value || 0.2),
+          max_tokens: Number(refs.maxTokens.value || 768)
+        },
+        retrieval_config: {
+          top_k: Number(refs.topK.value || 4),
+          collection: refs.collection.value.trim(),
+          rerank: false
+        },
+        trace: {
+          client: "local_rag_web_html",
+          created_at: new Date().toISOString()
+        }
+      };
+    }
+
+    function toVllmChatBody(payload) {
+      return {
+        model: payload.model,
+        messages: payload.messages,
+        temperature: payload.generation_config.temperature,
+        max_tokens: payload.generation_config.max_tokens
+      };
+    }
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      const raw = await res.text();
+      let json = null;
+      try { json = JSON.parse(raw); } catch (e) {}
+      return { ok: res.ok, status: res.status, raw, json };
+    }
+
+    function readDirectContent(respJson) {
+      const choices = Array.isArray(respJson?.choices) ? respJson.choices : [];
+      if (!choices.length) return "";
+      const content = choices[0]?.message?.content;
+      if (typeof content === "string") return content.trim();
+      if (Array.isArray(content)) {
+        return content
+          .filter((x) => x && x.type === "text")
+          .map((x) => String(x.text || ""))
+          .join("\n")
+          .trim();
+      }
+      return String(content ?? "").trim();
+    }
+
+    async function testConnection() {
+      const mode = refs.mode.value;
+      setStatus(refs.connStatus, "Connecting...", "warn");
+      const t0 = performance.now();
+      try {
+        if (mode === "rag") {
+          const backendUrl = trimSlash(refs.backendUrl.value);
+          if (!backendUrl) {
+            setStatus(refs.connStatus, "RAG Backend URL is required", "err");
+            return;
+          }
+          const out = await fetchJson(backendUrl + "/health", { method: "GET" });
+          const ms = Math.round(performance.now() - t0);
+          if (!out.ok) {
+            setStatus(refs.connStatus, "RAG backend failed HTTP " + out.status + "\n" + (out.raw || "").slice(0, 400), "err");
+            return;
+          }
+          setStatus(refs.connStatus, "RAG backend connected (" + ms + " ms)\n" + JSON.stringify(out.json || {}, null, 2), "ok");
+          return;
+        }
+
+        const baseUrl = trimSlash(refs.baseUrl.value);
+        if (!baseUrl) {
+          setStatus(refs.connStatus, "LLM Base URL is required", "err");
+          return;
+        }
+        const out = await fetchJson(baseUrl + "/v1/models", {
+          method: "GET",
+          headers: { Authorization: "Bearer " + refs.apiKey.value.trim() }
+        });
+        const ms = Math.round(performance.now() - t0);
+        if (!out.ok) {
+          setStatus(refs.connStatus, "Failed HTTP " + out.status + "\n" + (out.raw || "").slice(0, 400), "err");
+          return;
+        }
+        const models = (out.json?.data || []).map((m) => m.id).filter(Boolean);
+        if (!refs.model.value.trim() && models.length) refs.model.value = models[0];
+        setStatus(refs.connStatus, "LLM connected (" + ms + " ms)\nmodels:\n" + (models.join("\n") || "(empty)"), "ok");
+      } catch (err) {
+        setStatus(refs.connStatus, "Connection error: " + (err?.message || String(err)), "err");
+      }
+    }
+
+    async function refreshModels() {
+      const baseUrl = trimSlash(refs.baseUrl.value);
+      setStatus(refs.connStatus, "Refreshing...", "warn");
+      try {
+        const out = await fetchJson(baseUrl + "/v1/models", {
+          method: "GET",
+          headers: { Authorization: "Bearer " + refs.apiKey.value.trim() }
+        });
+        if (!out.ok) {
+          setStatus(refs.connStatus, "Refresh failed HTTP " + out.status, "err");
+          return;
+        }
+        const models = (out.json?.data || []).map((m) => m.id).filter(Boolean);
+        if (models.length) refs.model.value = models[0];
+        setStatus(refs.connStatus, "Refreshed, models: " + models.length, "ok");
+      } catch (err) {
+        setStatus(refs.connStatus, "Refresh error: " + (err?.message || String(err)), "err");
+      }
+    }
+
+    async function invokeChat(payload) {
+      if (payload.mode === "rag") {
+        const backendUrl = trimSlash(refs.backendUrl.value);
+        const out = await fetchJson(backendUrl + "/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!out.ok) {
+          throw new Error("RAG request failed HTTP " + out.status + "\n" + (out.raw || "").slice(0, 600));
+        }
+        return out.json;
+      }
+
+      if (!payload.model) throw new Error("model is required");
+
+      const baseUrl = trimSlash(refs.baseUrl.value);
+      const body = toVllmChatBody(payload);
+      const out = await fetchJson(baseUrl + "/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + refs.apiKey.value.trim()
+        },
+        body: JSON.stringify(body)
+      });
+      if (!out.ok) {
+        throw new Error("Request failed HTTP " + out.status + "\n" + (out.raw || "").slice(0, 600));
+      }
+      return out.json;
+    }
+
+    function saveConfig() {
+      const cfg = {
+        baseUrl: refs.baseUrl.value,
+        backendUrl: refs.backendUrl.value,
+        provider: refs.provider.value,
+        mode: refs.mode.value,
+        apiKey: refs.apiKey.value,
+        model: refs.model.value,
+        collection: refs.collection.value,
+        topK: refs.topK.value,
+        temperature: refs.temperature.value,
+        maxTokens: refs.maxTokens.value,
+        systemPrompt: refs.systemPrompt.value,
+        userPrompt: refs.userPrompt.value
+      };
+      localStorage.setItem(STORE_KEY, JSON.stringify(cfg));
+      setStatus(refs.connStatus, "Config saved to localStorage", "ok");
+    }
+
+    function loadConfig() {
+      try {
+        const raw = localStorage.getItem(STORE_KEY);
+        if (!raw) return;
+        const cfg = JSON.parse(raw);
+        Object.keys(cfg).forEach((k) => {
+          if (refs[k] && typeof cfg[k] === "string") refs[k].value = cfg[k];
+        });
+      } catch (_) {}
+    }
+
+    async function sendChat() {
+      const payload = buildUnifiedPayload();
+      refs.payloadBox.textContent = JSON.stringify(payload, null, 2);
+      refs.ragBox.textContent = "No output yet.";
+      refs.previewBox.innerHTML = "";
+
+      if (!payload.messages[1].content) {
+        setStatus(refs.runStatus, "User prompt is required", "warn");
+        return;
+      }
+
+      setStatus(refs.runStatus, "Requesting...", "warn");
+      refs.answerBox.textContent = "Generating...";
+      const t0 = performance.now();
+      try {
+        const resp = await invokeChat(payload);
+        const ms = Math.round(performance.now() - t0);
+        refs.latency.textContent = "Latency: " + ms + " ms";
+
+        if (payload.mode === "rag") {
+          refs.answerBox.textContent = String(resp?.answer || "(empty)");
+          refs.ragBox.textContent = JSON.stringify(
+            {
+              retrieval_metrics: resp?.retrieval_metrics || {},
+              citations: resp?.citations || [],
+              media_refs: resp?.media_refs || [],
+              preview_images: resp?.preview_images || [],
+              contexts: resp?.contexts || []
+            },
+            null,
+            2
+          );
+          const backendBase = trimSlash(refs.backendUrl.value);
+          const previewsRaw = Array.isArray(resp?.preview_images) ? resp.preview_images : [];
+          const dedupMap = new Map();
+          for (const p of previewsRaw) {
+            const k = String(p.asset_url || "");
+            if (!k) continue;
+            if (!dedupMap.has(k)) {
+              dedupMap.set(k, p);
+            } else {
+              const old = dedupMap.get(k);
+              const idxSet = new Set([...(old.indices || []), ...(p.indices || []), old.index, p.index].filter(Boolean));
+              old.indices = Array.from(idxSet);
+              dedupMap.set(k, old);
+            }
+          }
+          const previews = Array.from(dedupMap.values());
+          refs.previewBox.innerHTML = previews.slice(0, 8).map((p) => {
+            const url = backendBase + String(p.asset_url || "");
+            const title = String(p.title || "(no title)");
+            const idx = Array.isArray(p.indices) && p.indices.length ? p.indices.join(",") : String(p.index || "");
+            const file = String(p.file_name || "");
+            const page = String(p.page_no || "");
+            const kind = String(p.kind || "image");
+            return `
+              <div style="border:1px solid #d4deea;border-radius:10px;padding:8px;background:#fff;">
+                <div style="font-size:12px;color:#4a607e;margin-bottom:6px;">${idx} | ${kind} | ${file} | p.${page}</div>
+                <img src="${url}" alt="${title}" style="width:100%;height:180px;object-fit:contain;background:#f4f7fb;border-radius:8px;border:1px solid #e4ebf5;" />
+                <div style="font-size:12px;margin-top:6px;color:#203754;">${title}</div>
+              </div>
+            `;
+          }).join("");
+          setStatus(refs.runStatus, "RAG request OK", "ok");
+        } else {
+          refs.answerBox.textContent = readDirectContent(resp) || "(empty)";
+          setStatus(refs.runStatus, "LLM direct request OK", "ok");
+        }
+      } catch (err) {
+        refs.answerBox.textContent = "ERROR\n" + (err?.message || String(err));
+        refs.ragBox.textContent = "ERROR";
+        refs.latency.textContent = "Latency: --";
+        setStatus(refs.runStatus, "Request failed: " + (err?.message || String(err)), "err");
+      }
+    }
+
+    function simulateRagPayload() {
+      const payload = buildUnifiedPayload();
+      payload.mode = "rag";
+      payload.retrieval_config.rerank = true;
+      refs.payloadBox.textContent = JSON.stringify(payload, null, 2);
+      setStatus(refs.runStatus, "RAG payload simulated (no network request)", "ok");
+    }
+
+    $("btnPing").addEventListener("click", testConnection);
+    $("btnModels").addEventListener("click", refreshModels);
+    $("btnSave").addEventListener("click", saveConfig);
+    $("btnSend").addEventListener("click", sendChat);
+    $("btnSimRag").addEventListener("click", simulateRagPayload);
+
+    loadConfig();
+    refs.payloadBox.textContent = JSON.stringify(buildUnifiedPayload(), null, 2);
+  </script>
+</body>
+</html>

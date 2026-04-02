@@ -1,0 +1,69 @@
+{
+  "global": {
+    "uri": "http://127.0.0.1:19530",
+    "device": "cuda"
+  },
+  "parse_mineru_v2": {
+    "pdf_path": "C:/codex_coding/Data/your.pdf",
+    "asset_dir": "C:/codex_coding/Data/embedding/mineru_assets",
+    "output_jsonl": "C:/codex_coding/Data/embedding/your_chunks.jsonl",
+    "mineru_backend": "pipeline",
+    "mineru_method": "auto",
+    "include_parents": false
+  },
+  "parse_mineru_v2_batch": {
+    "input_dir": "C:/codex_coding/Data/raw_pdfs",
+    "output_dir": "C:/codex_coding/Data/embedding",
+    "asset_dir": "C:/codex_coding/Data/embedding/mineru_assets",
+    "output_name": "winddata_en_all.jsonl",
+    "pattern": "DOC_*__en__*.pdf",
+    "mineru_backend": "pipeline",
+    "mineru_method": "txt",
+    "include_parents": false,
+    "summary_name": "_batch_summary.json"
+  },
+  "ingest_winddata_milvus": {
+    "jsonl_path": "C:/codex_coding/Data/embedding/winddata_en_all.jsonl",
+    "collection_name": "winddata_bge_m3_bm25",
+    "model_path": "C:/codex_coding/Models/bge-m3",
+    "batch_size": 64,
+    "log_every": 5,
+    "drop_old": true
+  },
+  "search": {
+    "collection": "winddata_bge_m3_bm25",
+    "model_path": "C:/codex_coding/Models/bge-m3",
+    "query": "wind turbine wake model and wind farm planning",
+    "top_k": 4,
+    "use_reranker": false,
+    "reranker_model_path": "C:/codex_coding/Models/BAAI/bge-reranker-v2-m3",
+    "save_context_json": "C:/codex_coding/Data/embedding/search_contexts.json",
+    "llm_base_url": "http://127.0.0.1:8001",
+    "llm_model": "/share/home/lijiyao/CCCC/Models/vlms/Qwen3-VL-8B-Instruct",
+    "llm_api_key": "EMPTY",
+    "llm_temperature": 0.2,
+    "llm_max_tokens": 768
+  },
+  "evaluate_recall_quality": {
+    "collection": "winddata_bge_m3_bm25",
+    "model_path": "C:/codex_coding/Models/bge-m3",
+    "evalset": "C:/codex_coding/Data/eval/ragas_evalset_weak.jsonl",
+    "output": "C:/codex_coding/Data/eval/recall_quality_report.json",
+    "use_reranker": false
+  },
+  "ragas_retrieval_eval": {
+    "collection": "winddata_bge_m3_bm25",
+    "model_path": "C:/codex_coding/Models/bge-m3",
+    "evalset": "C:/codex_coding/Data/eval/ragas_evalset_weak.jsonl",
+    "output": "C:/codex_coding/Data/eval/ragas_eval_result.json",
+    "use_reranker": false
+  },
+  "run_pipeline": {
+    "parse_mode": "batch",
+    "eval_script": "recall",
+    "skip_parse": false,
+    "skip_ingest": false,
+    "skip_search": false,
+    "skip_eval": false
+  }
+}

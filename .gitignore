@@ -1,0 +1,11 @@
+Data/
+
+Models/
+
+*.tmp
+
+src/
+
+*.json
+
+*.jsonl

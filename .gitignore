@@ -6,6 +6,10 @@ Models/
 
 src/
 
+.*/
+
 *.json
 
 *.jsonl
+
+wind_data/

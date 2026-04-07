@@ -41,6 +41,20 @@ bash scripts/ops/build_apptainer_in_wsl2.sh
 输出 tar 默认在：
 - `/home/lijiyao/container_build/artifacts/containers/wind-agent-offline_20260403.tar`
 
+上传到服务器并转成 `sif` 后，更新 `scripts/ops/start_remote_rag_backend_gpu6000.cmd` 的 `REMOTE_SIF` 路径。
+启动后先做三步检查（不做评测）：
+
+```bash
+# 1) health
+curl -s http://127.0.0.1:8787/health
+
+# 2) LangChain 依赖自检
+python scripts/ops/check_langchain_stack.py
+
+# 3) smoke 请求
+curl -s -X POST http://127.0.0.1:8787/api/chat -H "Content-Type: application/json" -d "{\"mode\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"风电尾流是什么\"}]}"
+```
+
 ## 目录说明（核心）
 
 - `api/`: FastAPI 接口
@@ -60,6 +74,21 @@ bash scripts/ops/build_apptainer_in_wsl2.sh
 - `POST /agent/chat`
 - `POST /tasks`
 - `GET /tasks/{task_id}`
+
+## 本地可观测（离线）
+
+默认使用本地 JSONL tracing（不依赖外网）：
+
+- `OBS_BACKEND=jsonl`
+- `OBS_ENABLED=true`
+- `OBS_TRACE_DIR=storage/traces`
+- `OBS_REDACTION_MODE=summary_id`
+
+LangSmith 变量仅做兼容预留（当前不启用上报）：
+
+- `LANGSMITH_ENDPOINT`
+- `LANGSMITH_PROJECT`
+- `LANGSMITH_API_KEY`
 
 ## 测试
 

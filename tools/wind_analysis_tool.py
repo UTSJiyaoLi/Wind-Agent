@@ -17,10 +17,11 @@ except Exception:  # noqa: BLE001
 
 class WindAnalysisToolInput(BaseModel):
     excel_path: str = Field(..., description="Excel path containing date, windSpd, windDire")
+    analysis_profile: str = Field(default="demo_m_strict", description="Analysis profile, default demo_m_strict")
 
 
-def _run_wind_analysis(excel_path: str) -> str:
-    result = run_analysis(excel_path)
+def _run_wind_analysis(excel_path: str, analysis_profile: str = "demo_m_strict") -> str:
+    result = run_analysis(excel_path, analysis_profile=analysis_profile)
     return json.dumps(result.model_dump(), ensure_ascii=False)
 
 
@@ -33,7 +34,8 @@ def build_wind_analysis_tool():
         name="wind_resource_analysis",
         description=(
             "Analyze wind resource from an Excel file with date, windSpd, windDire columns. "
-            "Returns structured JSON with metrics and chart file paths."
+            "Returns structured JSON with metrics and chart file paths. "
+            "Default analysis profile is demo_m_strict (aligned with demo.m)."
         ),
         args_schema=WindAnalysisToolInput,
         return_direct=False,

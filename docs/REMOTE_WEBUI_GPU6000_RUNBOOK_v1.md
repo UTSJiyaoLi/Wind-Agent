@@ -62,6 +62,10 @@ bash scripts/ops/build_apptainer_in_wsl2.sh
 
 ## 5. 日常维护规范
 
+- 启动后先做 3 个快速检查（不做评测）：
+  1. `curl -s http://127.0.0.1:8787/health`
+  2. `python scripts/ops/check_langchain_stack.py`
+  3. `curl -s -X POST http://127.0.0.1:8787/api/chat -H "Content-Type: application/json" -d "{\"mode\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"风电尾流是什么\"}]}" `
 - 新增脚本时同步补文档和用途说明。
 - 定期清理无用产物：`__pycache__`、`*.pyc`、过期日志、临时调试脚本。
 - 保留运行必需脚本与当前主路径（Web UI + 远端后端）。

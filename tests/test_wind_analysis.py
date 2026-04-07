@@ -45,3 +45,25 @@ def test_run_analysis_missing_required_columns(tmp_path: Path):
     assert result.warnings
     assert "Missing required columns" in result.warnings[0]
 
+
+def test_run_analysis_multiline_weather_excel_format(tmp_path: Path):
+    rows = [
+        ["meta", None, None, None, None],
+        ["站点信息", "秋田", "秋田", "秋田", None],
+        ["年月日", "平均風速(m/s)", "品質情報", "最多風向(16方位)", "品質情報"],
+        [None, None, None, None, None],
+        ["2014/12/24", "3.1", "8", "東南東", "8"],
+        ["2014/12/25", "5.8", "8", "北", "8"],
+        ["2014/12/26", "7.5", "8", "西北西", "8"],
+    ]
+    df = pd.DataFrame(rows)
+    excel_path = tmp_path / "multiline_weather.xlsx"
+    df.to_excel(excel_path, index=False, header=False)
+
+    result = run_analysis(str(excel_path))
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data.valid_rows >= 3
+    assert "histogram_weibull" in result.charts
+

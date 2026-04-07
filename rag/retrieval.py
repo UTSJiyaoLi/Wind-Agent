@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -309,6 +310,29 @@ def build_citations_and_media(contexts: list[dict[str, Any]]) -> tuple[list[dict
 
 def build_preview_images(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    merged: dict[str, dict[str, Any]] = {}
+
+    def _norm_path(p: str) -> str:
+        t = str(p or "").strip()
+        if not t:
+            return ""
+        return os.path.normpath(t).replace("\\", "/").lower()
+
+    def _merge_key(row: dict[str, Any]) -> str:
+        # Primary key: normalized absolute path (best signal for same image/table asset)
+        p = _norm_path(str(row.get("asset_path") or ""))
+        if p:
+            return f"path::{p}"
+        # Fallback: same file/page/title/kind is very likely same visual
+        return "meta::" + "|".join(
+            [
+                str(row.get("file_name") or "").strip().lower(),
+                str(row.get("page_no") or "").strip().lower(),
+                str(row.get("title") or "").strip().lower(),
+                str(row.get("kind") or "").strip().lower(),
+            ]
+        )
+
     for row in contexts:
         idx = f"CTX{row.get('rank')}"
         media = row.get("media_refs") or {}
@@ -337,7 +361,26 @@ def build_preview_images(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "asset_url": "/api/asset?path=" + quote(asset_path, safe=""),
                 }
             )
-    return rows
+    # Deduplicate visuals hit by multiple chunks and merge citation indices.
+    for item in rows:
+        key = _merge_key(item)
+        if key not in merged:
+            merged[key] = dict(item)
+            continue
+        existing = merged[key]
+        idx_set = set([*(existing.get("indices") or []), *(item.get("indices") or [])])
+        existing["indices"] = sorted(idx_set)
+        # Keep earliest index label stable for display.
+        if not existing.get("index") and item.get("index"):
+            existing["index"] = item.get("index")
+        # Prefer non-empty title/file/page.
+        for k in ("title", "file_name", "page_no"):
+            if not existing.get(k) and item.get(k):
+                existing[k] = item.get(k)
+        merged[key] = existing
+    out = list(merged.values())
+    out.sort(key=lambda x: (str(x.get("index") or ""), str(x.get("asset_path") or "")))
+    return out
 
 
 def render_citation_index(citations: list[dict[str, Any]]) -> str:
@@ -472,6 +515,15 @@ def _build_prompt_context_pack(
 
 
 def retrieve_contexts(runtime: Any, query: str, retrieval_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    started = time.time()
+    trace_id = str((retrieval_cfg or {}).get("_trace_id") or "").strip()
+    tracer = getattr(runtime, "tracer", None)
+    if tracer is None:
+        from observability.tracer import BaseTracer
+
+        tracer = BaseTracer()
+    if not trace_id:
+        trace_id = tracer.new_trace_id()
     args = runtime.args
     collection = str(retrieval_cfg.get("collection", args.collection)).strip() or args.collection
     coarse_k = int(retrieval_cfg.get("coarse_k", args.coarse_k))
@@ -643,6 +695,31 @@ def retrieve_contexts(runtime: Any, query: str, retrieval_cfg: dict[str, Any]) -
         "hydrated_count": hydration_hit,
         "hydrated_rate": round(float(hydration_hit) / float(len(contexts) or 1), 4),
         "orchestration": orchestration_info,
+        "elapsed_seconds": round(time.time() - started, 4),
     }
+    with tracer.span(
+        trace_id,
+        "retrieve_contexts_metrics",
+        metadata={
+            "query_summary": tracer.summarize_text(query, max_len=100),
+            "query_candidate_count": len(query_candidates),
+            "merge_size": len(merged_hits),
+            "dedup_size": len(dedup_hits),
+            "final_size": len(contexts),
+            "elapsed_seconds": metrics["elapsed_seconds"],
+        },
+    ):
+        pass
+    tracer.event(
+        trace_id,
+        "retrieve_contexts_preview",
+        metadata={
+            "query_candidates": [
+                {"source": q.get("source"), "query": tracer.summarize_text(str(q.get("query", "")), max_len=80)}
+                for q in query_candidates
+            ],
+            "top_contexts": tracer.redact_contexts(contexts),
+        },
+    )
     return contexts, prompt_contexts, metrics
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 
+from observability.tracer import build_tracer_from_args
+
 # 兼容某些容器中 FlagEmbedding 与 transformers 的版本差异。
 try:
     from transformers.models.gemma2 import modeling_gemma2 as _gemma2_modeling
@@ -39,6 +41,7 @@ class Runtime:
         self.client = MilvusClient(uri=args.uri)
         self.embed_model = None
         self.reranker = None
+        self.tracer = build_tracer_from_args(args)
 
     def get_embed_model(self) -> BGEM3FlagModel:
         if self.embed_model is None:
@@ -118,6 +121,13 @@ def parse_args() -> argparse.Namespace:
             "You are a rigorous assistant. Prioritize the provided context and explicitly state uncertainty when context is insufficient.",
         ),
     )
+    parser.add_argument("--obs-enabled", type=_strtobool, default=_strtobool(os.getenv("OBS_ENABLED", "true")))
+    parser.add_argument("--obs-backend", default=os.getenv("OBS_BACKEND", "jsonl"), choices=["jsonl", "langsmith", "none"])
+    parser.add_argument("--obs-trace-dir", default=os.getenv("OBS_TRACE_DIR", "storage/traces"))
+    parser.add_argument("--obs-redaction-mode", default=os.getenv("OBS_REDACTION_MODE", "summary_id"))
+    parser.add_argument("--langsmith-endpoint", default=os.getenv("LANGSMITH_ENDPOINT", ""))
+    parser.add_argument("--langsmith-project", default=os.getenv("LANGSMITH_PROJECT", "wind-agent-rag-eval"))
+    parser.add_argument("--langsmith-api-key", default=os.getenv("LANGSMITH_API_KEY", ""))
     return parser.parse_args()
 
 

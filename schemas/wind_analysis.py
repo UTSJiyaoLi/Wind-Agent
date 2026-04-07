@@ -11,6 +11,10 @@ class WindAnalysisInput(BaseModel):
     """Input schema for wind analysis tool."""
 
     excel_path: str = Field(..., description="Path to Excel file containing date, windSpd, windDire columns")
+    analysis_profile: str = Field(
+        default="demo_m_strict",
+        description="Analysis profile. Use 'demo_m_strict' to match demo.m behavior.",
+    )
 
 
 class DirectionMetric(BaseModel):

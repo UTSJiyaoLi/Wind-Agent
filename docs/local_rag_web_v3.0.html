@@ -252,9 +252,10 @@
           </div>
         </div>
 
-        <div class="btns2">
+        <div class="btns" style="grid-template-columns: repeat(3, minmax(120px, 1fr));">
           <button id="btnSend" class="primary">Send</button>
           <button id="btnSimRag" class="ghost">Simulate RAG Payload</button>
+          <button id="btnSaveResult" class="ghost">Save Result</button>
         </div>
         <div id="runStatus" class="status">Waiting for request...</div>
       </section>
@@ -309,8 +310,10 @@
       payloadBox: $("payloadBox"),
       ragBox: $("ragBox"),
       previewBox: $("previewBox"),
-      latency: $("latency")
+      latency: $("latency"),
+      btnSaveResult: $("btnSaveResult")
     };
+    let lastResponseData = null;
 
     function setStatus(el, text, kind) {
       el.className = "status " + (kind || "");
@@ -433,8 +436,10 @@
         String(out?.json?.error || out.raw || "").includes("Unsupported mode: auto")
       ) {
         const text = String(payload?.messages?.[1]?.content || "").toLowerCase();
-        const looksLikeTool = ["分析", "wind", "weibull", "风速", "风向", "xlsx", "xls"].some((k) => text.includes(k));
-        const fallbackPayload = { ...payload, mode: looksLikeTool ? "wind_agent" : "rag" };
+        const windDomain = ["wind", "wind farm", "wind turbine", "weibull", "aep", "scada", "风电", "风场", "风机", "风速", "风向", "尾流"].some((k) => text.includes(k));
+        const looksLikeTool = ["分析", "计算", "绘图", "建模", "analyze", "plot", "fit", "xlsx", "xls"].some((k) => text.includes(k));
+        const fallbackMode = looksLikeTool ? "wind_agent" : (windDomain ? "rag" : "llm_direct");
+        const fallbackPayload = { ...payload, mode: fallbackMode };
         const retry = await fetchJson(backendUrl + "/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -449,6 +454,41 @@
         throw new Error("Backend request failed HTTP " + out.status + "\n" + (out.raw || "").slice(0, 600));
       }
       return out.json;
+    }
+
+    function renderPreviewCards(previewImages) {
+      const backendBase = trimSlash(refs.backendUrl.value);
+      const previewsRaw = Array.isArray(previewImages) ? previewImages : [];
+      const dedupMap = new Map();
+      for (const p of previewsRaw) {
+        const k = String(p.asset_url || "");
+        if (!k) continue;
+        if (!dedupMap.has(k)) {
+          dedupMap.set(k, p);
+        } else {
+          const old = dedupMap.get(k);
+          const idxSet = new Set([...(old.indices || []), ...(p.indices || []), old.index, p.index].filter(Boolean));
+          old.indices = Array.from(idxSet);
+          dedupMap.set(k, old);
+        }
+      }
+      const previews = Array.from(dedupMap.values());
+      refs.previewBox.innerHTML = previews.slice(0, 12).map((p) => {
+        const url = backendBase + String(p.asset_url || "");
+        const title = String(p.title || "(no title)");
+        const idx = Array.isArray(p.indices) && p.indices.length ? p.indices.join(",") : String(p.index || "");
+        const file = String(p.file_name || "");
+        const page = String(p.page_no || "");
+        const kind = String(p.kind || "image");
+        return `
+          <div style="border:1px solid #d4deea;border-radius:10px;padding:8px;background:#fff;">
+            <div style="font-size:12px;color:#4a607e;margin-bottom:6px;">${idx} | ${kind} | ${file} ${page ? ("| p." + page) : ""}</div>
+            <img src="${url}" alt="${title}" style="width:100%;height:180px;object-fit:contain;background:#f4f7fb;border-radius:8px;border:1px solid #e4ebf5;" />
+            <div style="font-size:12px;margin-top:6px;color:#203754;">${title}</div>
+            <a href="${url}" download style="display:inline-block;margin-top:6px;font-size:12px;color:#0f6fff;text-decoration:none;">Download</a>
+          </div>
+        `;
+      }).join("");
     }
 
     function saveConfig() {
@@ -501,6 +541,7 @@
       const t0 = performance.now();
       try {
         const resp = await invokeChat(payload);
+        lastResponseData = resp;
         const ms = Math.round(performance.now() - t0);
         const actualMode = String(resp?.mode || payload.mode || "auto");
         refs.latency.textContent = "Latency: " + ms + " ms";
@@ -518,37 +559,7 @@
             null,
             2
           );
-          const backendBase = trimSlash(refs.backendUrl.value);
-          const previewsRaw = Array.isArray(resp?.preview_images) ? resp.preview_images : [];
-          const dedupMap = new Map();
-          for (const p of previewsRaw) {
-            const k = String(p.asset_url || "");
-            if (!k) continue;
-            if (!dedupMap.has(k)) {
-              dedupMap.set(k, p);
-            } else {
-              const old = dedupMap.get(k);
-              const idxSet = new Set([...(old.indices || []), ...(p.indices || []), old.index, p.index].filter(Boolean));
-              old.indices = Array.from(idxSet);
-              dedupMap.set(k, old);
-            }
-          }
-          const previews = Array.from(dedupMap.values());
-          refs.previewBox.innerHTML = previews.slice(0, 8).map((p) => {
-            const url = backendBase + String(p.asset_url || "");
-            const title = String(p.title || "(no title)");
-            const idx = Array.isArray(p.indices) && p.indices.length ? p.indices.join(",") : String(p.index || "");
-            const file = String(p.file_name || "");
-            const page = String(p.page_no || "");
-            const kind = String(p.kind || "image");
-            return `
-              <div style="border:1px solid #d4deea;border-radius:10px;padding:8px;background:#fff;">
-                <div style="font-size:12px;color:#4a607e;margin-bottom:6px;">${idx} | ${kind} | ${file} | p.${page}</div>
-                <img src="${url}" alt="${title}" style="width:100%;height:180px;object-fit:contain;background:#f4f7fb;border-radius:8px;border:1px solid #e4ebf5;" />
-                <div style="font-size:12px;margin-top:6px;color:#203754;">${title}</div>
-              </div>
-            `;
-          }).join("");
+          renderPreviewCards(resp?.preview_images || []);
           setStatus(refs.runStatus, "RAG request OK (auto routed)", "ok");
         } else if (actualMode === "wind_agent") {
           refs.answerBox.textContent = String(resp?.answer || "(empty)");
@@ -557,18 +568,22 @@
               success: resp?.success,
               error: resp?.error,
               trace: resp?.trace || [],
-              analysis: resp?.analysis || {}
+              analysis: resp?.analysis || {},
+              tool_charts: resp?.tool_charts || {},
+              preview_images: resp?.preview_images || []
             },
             null,
             2
           );
-          refs.previewBox.innerHTML = "";
+          renderPreviewCards(resp?.preview_images || []);
           setStatus(refs.runStatus, "Wind Agent request OK (auto routed)", "ok");
         } else {
           refs.answerBox.textContent = String(resp?.answer || readDirectContent(resp) || "(empty)");
+          refs.previewBox.innerHTML = "";
           setStatus(refs.runStatus, "LLM direct request OK (auto routed)", "ok");
         }
       } catch (err) {
+        lastResponseData = null;
         refs.answerBox.textContent = "ERROR\n" + (err?.message || String(err));
         refs.ragBox.textContent = "ERROR";
         refs.latency.textContent = "Latency: --";
@@ -584,11 +599,29 @@
       setStatus(refs.runStatus, "RAG payload simulated (no network request)", "ok");
     }
 
+    function saveResult() {
+      if (!lastResponseData) {
+        setStatus(refs.runStatus, "No result to save yet", "warn");
+        return;
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const blob = new Blob([JSON.stringify(lastResponseData, null, 2)], { type: "application/json;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `wind_agent_result_${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      setStatus(refs.runStatus, "Result JSON downloaded", "ok");
+    }
+
     $("btnPing").addEventListener("click", testConnection);
     $("btnModels").addEventListener("click", refreshModels);
     $("btnSave").addEventListener("click", saveConfig);
     $("btnSend").addEventListener("click", sendChat);
     $("btnSimRag").addEventListener("click", simulateRagPayload);
+    $("btnSaveResult").addEventListener("click", saveResult);
 
     loadConfig();
     refs.payloadBox.textContent = JSON.stringify(buildUnifiedPayload(), null, 2);

@@ -54,9 +54,12 @@ from rag.runtime import Runtime, parse_args
 
 
 def build_app_handler(runtime: Runtime):
+    repo_root_local = Path(__file__).resolve().parents[2]
     allowed_asset_roots = [
         "/work/Data/embedding/assets",
         "/share/home/lijiyao/CCCC/Data/embedding/assets",
+        str(repo_root_local / "wind_data"),
+        str(repo_root_local / "storage"),
     ]
 
     class Handler(BaseHTTPRequestHandler):
@@ -89,6 +92,7 @@ def build_app_handler(runtime: Runtime):
                         "service": "rag_local_api",
                         "collection": runtime.args.collection,
                         "llm_base_url": runtime.args.llm_base_url,
+                        "observability": getattr(runtime, "tracer", None).info() if getattr(runtime, "tracer", None) else {},
                     },
                 )
                 return
@@ -169,6 +173,8 @@ def main() -> None:
     print(f"[rag_local_api] starting http://{args.host}:{args.port}")
     print(f"[rag_local_api] milvus={args.uri} collection={args.collection}")
     print(f"[rag_local_api] llm_base_url={args.llm_base_url}")
+    if getattr(runtime, "tracer", None):
+        print(f"[rag_local_api] observability={runtime.tracer.info()}")
     server = ThreadingHTTPServer((args.host, args.port), build_app_handler(runtime))
     server.serve_forever()
 

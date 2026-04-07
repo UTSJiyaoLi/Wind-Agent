@@ -95,7 +95,7 @@ def test_handle_chat_request_wind_agent_path() -> None:
         runtime=_runtime(),
         run_wind_agent_flow=lambda *_args, **_kwargs: {
             "summary": "agent-ok",
-            "analysis": {"success": True},
+            "analysis": {"success": True, "charts": {"wind_rose": "/tmp/wind_rose.png"}},
             "trace": [{"step": "plan_request"}],
             "error": None,
             "success": True,
@@ -113,6 +113,7 @@ def test_handle_chat_request_wind_agent_path() -> None:
     assert payload["mode"] == "wind_agent"
     assert payload["answer"] == "agent-ok"
     assert payload["success"] is True
+    assert isinstance(payload.get("preview_images"), list)
 
 
 def test_handle_chat_request_auto_mode_routes_to_rag() -> None:
@@ -175,6 +176,34 @@ def test_handle_chat_request_auto_mode_routes_to_wind_agent() -> None:
     assert status == 200
     assert payload["mode"] == "wind_agent"
     assert payload["answer"] == "auto-agent"
+
+
+def test_handle_chat_request_auto_mode_routes_to_llm_direct_for_general_query() -> None:
+    req = {
+        "mode": "auto",
+        "provider": "vllm",
+        "messages": [{"role": "user", "content": "帮我写一段周报开头"}],
+        "generation_config": {},
+        "retrieval_config": {},
+    }
+
+    status, payload = handle_chat_request(
+        request_path="/api/chat",
+        req=req,
+        runtime=_runtime(),
+        run_wind_agent_flow=lambda *_args, **_kwargs: {"summary": "unused"},
+        call_vllm_chat=lambda **_: "direct-answer",
+        retrieve_contexts=lambda *_: ([{"rank": 1}], [{"rank": 1}], {"final_size": 1}),
+        build_citations_and_media=lambda *_: ([{"index": "CTX1"}], [{"index": "CTX1"}]),
+        build_preview_images=lambda *_: [],
+        format_contexts_for_prompt=lambda *_: "ctx",
+        summarize_media_for_prompt=lambda *_: "media",
+        render_citation_index=lambda *_: "idx",
+    )
+
+    assert status == 200
+    assert payload["mode"] == "llm_direct"
+    assert payload["answer"] == "direct-answer"
 
 
 

@@ -17,7 +17,7 @@ set "REMOTE_ORCH_LLM_MODEL=/share/home/lijiyao/CCCC/Models/vlms/Qwen3-VL-8B-Inst
 set "REMOTE_META_JSONL=/share/home/lijiyao/CCCC/Data/embedding/full_metadata.jsonl"
 set "REMOTE_META_IDX=/share/home/lijiyao/CCCC/Data/embedding/full_metadata.idx.json"
 
-set "REMOTE_CMD=cd %REMOTE_REPO% && tmux kill-session -t %TMUX_SESSION% 2>/dev/null; tmux new -d -s %TMUX_SESSION% ""apptainer exec %REMOTE_SIF% python scripts/search/rag_local_api.py --host 127.0.0.1 --port 8787 --uri http://127.0.0.1:19530 --collection winddata_bge_m3_bm25 --model-path %REMOTE_MODEL% --llm-base-url %REMOTE_CHAT_LLM_BASE% --llm-model %REMOTE_CHAT_LLM_MODEL% --orchestrator-base-url %REMOTE_ORCH_LLM_BASE% --orchestrator-model %REMOTE_ORCH_LLM_MODEL% --hydrate-full-metadata --full-metadata-jsonl %REMOTE_META_JSONL% --full-metadata-idx %REMOTE_META_IDX%"" && tmux ls | grep %TMUX_SESSION%"
+set "REMOTE_CMD=cd %REMOTE_REPO% && tmux kill-session -t %TMUX_SESSION% 2>/dev/null; tmux new -d -s %TMUX_SESSION% ""apptainer exec %REMOTE_SIF% python scripts/search/rag_local_api.py --host 127.0.0.1 --port 8787 --uri http://127.0.0.1:19530 --collection winddata_bge_m3_bm25 --model-path %REMOTE_MODEL% --llm-base-url %REMOTE_CHAT_LLM_BASE% --llm-model %REMOTE_CHAT_LLM_MODEL% --orchestrator-base-url %REMOTE_ORCH_LLM_BASE% --orchestrator-model %REMOTE_ORCH_LLM_MODEL% --hydrate-full-metadata --full-metadata-jsonl %REMOTE_META_JSONL% --full-metadata-idx %REMOTE_META_IDX% --obs-enabled true --obs-backend jsonl --obs-trace-dir storage/traces --obs-redaction-mode summary_id"" && tmux ls | grep %TMUX_SESSION%"
 
 echo Starting remote backend on gpu6000 (tmux session: %TMUX_SESSION%) ...
 ssh -J %JUMP_HOST% %TARGET_HOST% "%REMOTE_CMD%"

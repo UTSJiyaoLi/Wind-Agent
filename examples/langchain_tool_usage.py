@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+﻿"""LangChain 工具调用方式的示例脚本。"""
+
+from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,3 +14,4 @@ if __name__ == "__main__":
     tool = build_wind_analysis_tool()
     result = tool.invoke({"excel_path": r"wind_data\wind condition @Akida.xlsx"})
     print(result)
+

@@ -1,3 +1,5 @@
+﻿"""检索召回质量评估脚本。"""
+
 import argparse
 import json
 import sys
@@ -318,3 +320,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

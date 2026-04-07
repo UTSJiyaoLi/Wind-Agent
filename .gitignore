@@ -13,3 +13,8 @@ src/
 *.jsonl
 
 wind_data/
+
+__pycache__/
+*.pyc
+artifacts/
+wind-agent-code.tar

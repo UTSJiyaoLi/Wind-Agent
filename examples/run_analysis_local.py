@@ -1,4 +1,6 @@
-﻿import json
+﻿"""本地运行风资源分析服务的示例脚本。"""
+
+import json
 from pathlib import Path
 import sys
 
@@ -13,3 +15,4 @@ if __name__ == "__main__":
     excel_path = r"wind_data\wind condition @Akida.xlsx"
     result = run_analysis(excel_path)
     print(json.dumps(result.model_dump(), indent=2, ensure_ascii=False))
+

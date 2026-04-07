@@ -1,3 +1,5 @@
+﻿"""基于 RAGAS 的检索评测脚本。"""
+
 import argparse
 import json
 import sys
@@ -195,3 +197,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

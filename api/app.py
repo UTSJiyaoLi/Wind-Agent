@@ -1,9 +1,18 @@
-﻿from __future__ import annotations
+﻿"""Wind Agent 的 FastAPI 入口，提供健康检查、任务接口与 Agent 对话接口。"""
+
+from __future__ import annotations
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
-from orchestration.langgraph_flow import run_wind_analysis_flow
-from schemas.api import CreateTaskRequest, CreateTaskResponse, TaskStateResponse, TaskStatus
+from graph.builder import run_wind_agent_flow, run_wind_analysis_flow
+from schemas.api import (
+    AgentChatRequest,
+    AgentChatResponse,
+    CreateTaskRequest,
+    CreateTaskResponse,
+    TaskStateResponse,
+    TaskStatus,
+)
 from storage.task_store import TASK_STORE
 
 app = FastAPI(title="Wind Agent API", version="1.0.0")
@@ -36,6 +45,21 @@ def get_task(task_id: str) -> TaskStateResponse:
     )
 
 
+@app.post("/agent/chat", response_model=AgentChatResponse)
+def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
+    try:
+        result = run_wind_agent_flow(req.request, req.excel_path)
+        return AgentChatResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        return AgentChatResponse(
+            success=False,
+            request=req.request,
+            summary="Agent execution failed.",
+            error=str(exc),
+            trace=[],
+        )
+
+
 def _run_task(task_id: str, excel_path: str) -> None:
     TASK_STORE.mark_running(task_id)
     try:
@@ -43,3 +67,5 @@ def _run_task(task_id: str, excel_path: str) -> None:
         TASK_STORE.mark_success(task_id, flow_result)
     except Exception as exc:  # noqa: BLE001
         TASK_STORE.mark_failed(task_id, str(exc))
+
+

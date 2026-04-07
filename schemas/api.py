@@ -1,7 +1,9 @@
-﻿from __future__ import annotations
+﻿"""API 请求与响应的数据模型定义。"""
+
+from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -28,3 +30,29 @@ class TaskStateResponse(BaseModel):
     message: str
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+
+class AgentChatRequest(BaseModel):
+    request: str = Field(..., description="User natural language request")
+    excel_path: Optional[str] = Field(
+        default=None,
+        description="Optional explicit excel path. If omitted, agent will try to parse from request text.",
+    )
+
+
+class AgentTraceStep(BaseModel):
+    step: str
+    status: str
+    message: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentChatResponse(BaseModel):
+    success: bool
+    request: str
+    resolved_excel_path: Optional[str] = None
+    summary: str = ""
+    analysis: Optional[Dict[str, Any]] = None
+    trace: List[AgentTraceStep] = Field(default_factory=list)
+    error: Optional[str] = None
+

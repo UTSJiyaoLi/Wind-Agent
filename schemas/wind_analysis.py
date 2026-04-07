@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+﻿"""风资源分析输入输出与结构化结果模型定义。"""
+
+from __future__ import annotations
 
 from typing import Dict, List, Optional
 
@@ -40,3 +42,4 @@ class WindAnalysisOutput(BaseModel):
     charts: Dict[str, str]
     data: Optional[WindAnalysisData] = None
     warnings: List[str] = Field(default_factory=list)
+

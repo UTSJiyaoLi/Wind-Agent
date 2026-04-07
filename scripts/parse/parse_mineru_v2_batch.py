@@ -1,3 +1,5 @@
+﻿"""批量解析入口：对多个文档执行 MinerU v2 解析流程。"""
+
 import argparse
 import json
 import sys
@@ -107,3 +109,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

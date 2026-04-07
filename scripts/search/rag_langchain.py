@@ -1,3 +1,5 @@
+﻿"""RAG 与 LangChain 相关的辅助逻辑与上下文格式化能力。"""
+
 import argparse
 import json
 import os
@@ -304,3 +306,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

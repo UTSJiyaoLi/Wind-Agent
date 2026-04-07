@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+﻿"""将风资源分析服务封装为 LangChain StructuredTool。"""
+
+from __future__ import annotations
 
 import json
 from typing import Type
@@ -36,3 +38,4 @@ def build_wind_analysis_tool():
         args_schema=WindAnalysisToolInput,
         return_direct=False,
     )
+

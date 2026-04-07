@@ -1,3 +1,5 @@
+﻿"""单文件解析入口：调用 MinerU v2 解析并产出结构化内容。"""
+
 import argparse
 import json
 import sys
@@ -47,3 +49,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

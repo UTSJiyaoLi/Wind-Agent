@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+﻿"""LangGraph 流程的单元测试。"""
+
+from pathlib import Path
 
 import pandas as pd
 
@@ -22,3 +24,4 @@ def test_run_wind_analysis_flow_success(tmp_path: Path):
     assert "analysis" in result
     assert result["analysis"]["success"] is True
     assert "charts" in result["analysis"]
+

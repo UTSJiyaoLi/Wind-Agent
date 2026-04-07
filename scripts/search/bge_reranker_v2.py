@@ -1,4 +1,21 @@
+﻿"""BGE Reranker 的推理封装，用于检索候选重排序。"""
+
 from typing import Any
+
+# 兼容某些容器中 FlagEmbedding 与 transformers 的版本差异。
+try:
+    from transformers.models.gemma2 import modeling_gemma2 as _gemma2_modeling
+
+    for _name in (
+        "GEMMA2_START_DOCSTRING",
+        "GEMMA2_INPUTS_DOCSTRING",
+        "GEMMA2_RETURN_INTRODUCTION",
+        "GEMMA2_GENERATION_EXAMPLE",
+    ):
+        if not hasattr(_gemma2_modeling, _name):
+            setattr(_gemma2_modeling, _name, "")
+except Exception:
+    pass
 
 from FlagEmbedding import FlagReranker
 
@@ -50,3 +67,4 @@ class BGERerankerV2:
 
         rescored.sort(key=lambda x: x.get("rerank_score", float("-inf")), reverse=True)
         return rescored[:top_k]
+

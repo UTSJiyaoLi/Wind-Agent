@@ -1,77 +1,65 @@
-﻿# Wind Resource Agent (LangGraph + StructuredTool)
+﻿# Wind Resource Agent
 
-## 架构布局
+## 当前默认运行拓扑
 
-- `schemas/`: pydantic 输入输出定义
-- `services/`: 风资源核心分析逻辑（Weibull、图表、异常处理）
-- `tools/`: LangChain `StructuredTool` 封装
-- `orchestration/`: LangGraph 主流程编排
-- `storage/`: 任务状态存储与落盘
-- `api/`: FastAPI 应用层（异步任务接口）
-- `ui/`: Streamlit 用户界面
-- `examples/`: 调用示例
-- `tests/`: 单元测试
+- 前端：本地浏览器打开 `docs/local_rag_web_v3.0.html`
+- 后端：统一运行在 `lijiyao -> gpu6000`
+- 连接：本地通过 SSH 端口转发访问 `gpu6000:127.0.0.1:8787`
+- 容器：优先使用服务器现有 `apptainer` 镜像；不满足时在本地 WSL2 构建
 
-## 核心能力
+## 一键操作
 
-- 输入固定：Excel 路径，必须包含 `date`、`windSpd`、`windDire`
-- 输出固定：结构化 JSON + 图表文件路径
-- Weibull 拟合：`scipy.stats.weibull_min.fit(..., floc=0)`
-- 风玫瑰速度分箱去重：`[3,7)`, `[7,11)`, `[11,15]`
-- 稳健异常处理：缺列、空数据、读取失败、拟合/绘图异常统一结构化返回
-
-## 环境
+### 1) 在远端启动后端（tmux + apptainer）
 
 ```powershell
-conda activate rag_task
-pip install pandas numpy scipy matplotlib pydantic openpyxl pytest langchain-core langgraph fastapi uvicorn streamlit requests
+.\scripts\ops\start_remote_rag_backend_gpu6000.cmd
 ```
 
-## 运行方式
-
-### 1) 直接运行分析
+### 2) 本地开隧道并打开 Web UI
 
 ```powershell
-conda activate rag_task
-python examples/run_analysis_local.py
+.\scripts\ops\start_rag_web_local.cmd
 ```
 
-### 2) 运行 LangGraph 主流程
+### 3) Web UI 参数
 
-```powershell
-conda activate rag_task
-python examples/run_langgraph_flow.py
+- `Mode`: `RAG` 或 `Wind Agent Tool`
+- `RAG Backend URL`: `http://127.0.0.1:8787`
+
+## WSL2 构建离线容器包（备用）
+
+你给定的构建目录是：
+- `\\wsl$\Ubuntu\home\lijiyao\container_build`
+
+在 WSL2 中执行：
+
+```bash
+cd /mnt/c/wind-agent
+bash scripts/ops/build_apptainer_in_wsl2.sh
 ```
 
-### 3) 启动 API
+输出 tar 默认在：
+- `/home/lijiyao/container_build/artifacts/containers/wind-agent-offline_20260403.tar`
 
-```powershell
-conda activate rag_task
-uvicorn api.app:app --host 0.0.0.0 --port 8005
-```
+## 目录说明（核心）
 
-### 4) 启动 UI
-
-```powershell
-conda activate rag_task
-streamlit run ui/streamlit_app.py --server.port 8501
-```
-
-UI 默认调用 `http://127.0.0.1:8005`。
+- `api/`: FastAPI 接口
+- `orchestration/`: LangGraph 编排
+- `services/`: 风资源分析逻辑
+- `tools/`: 工具封装
+- `scripts/search/rag_local_api.py`: RAG/Agent 统一后端服务
+- `scripts/ops/`: 运维脚本（远端启动、隧道、容器构建）
+- `docs/local_rag_web_v3.0.html`: 主 Web UI
 
 ## API 说明
 
+- `POST /api/chat`
+  - `mode=llm_direct`
+  - `mode=rag`
+  - `mode=wind_agent`
+- `POST /agent/chat`
 - `POST /tasks`
-  - body: `{"excel_path": "C:\\wind-agent\\wind_data\\wind condition @Akida.xlsx"}`
-  - return: `task_id`
 - `GET /tasks/{task_id}`
-  - return: 状态 `pending/running/success/failed` + 结果
-
-## 远端 vLLM（已启动）
-
-- 远端服务: `gpu6000` 上 `0.0.0.0:8003`
-- 本地转发: `127.0.0.1:18003 -> gpu6000:127.0.0.1:8003`
-- 本地 API Base: `http://127.0.0.1:18003/v1`
 
 ## 测试
 
@@ -79,3 +67,4 @@ UI 默认调用 `http://127.0.0.1:8005`。
 conda activate rag_task
 pytest -q
 ```
+

@@ -161,6 +161,7 @@
             <select id="mode">
               <option value="llm_direct">LLM Direct</option>
               <option value="rag">RAG</option>
+              <option value="wind_agent">Wind Agent Tool</option>
             </select>
           </div>
         </div>
@@ -533,6 +534,20 @@
             `;
           }).join("");
           setStatus(refs.runStatus, "RAG request OK", "ok");
+        } else if (payload.mode === "wind_agent") {
+          refs.answerBox.textContent = String(resp?.answer || "(empty)");
+          refs.ragBox.textContent = JSON.stringify(
+            {
+              success: resp?.success,
+              error: resp?.error,
+              trace: resp?.trace || [],
+              analysis: resp?.analysis || {}
+            },
+            null,
+            2
+          );
+          refs.previewBox.innerHTML = "";
+          setStatus(refs.runStatus, "Wind Agent request OK", "ok");
         } else {
           refs.answerBox.textContent = String(resp?.answer || readDirectContent(resp) || "(empty)");
           setStatus(refs.runStatus, "LLM direct request OK (single backend entry)", "ok");

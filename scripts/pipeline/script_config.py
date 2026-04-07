@@ -1,3 +1,5 @@
+﻿"""流水线与脚本运行参数配置定义。"""
+
 import json
 import sys
 from argparse import Namespace
@@ -59,3 +61,4 @@ def apply_config_overrides(args: Namespace, section: str, argv: Optional[List[st
         if hasattr(args, key):
             setattr(args, key, value)
     return args
+

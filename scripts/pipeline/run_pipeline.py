@@ -1,3 +1,5 @@
+﻿"""数据处理流水线执行入口，串联解析、入库与评估等阶段。"""
+
 import argparse
 import subprocess
 import sys
@@ -60,3 +62,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

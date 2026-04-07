@@ -10,7 +10,8 @@
 - `Data/`: RAG 数据集、embedding、评估集与中间产物
 - `Models/`: 本地模型与 reranker 权重
 - `docs/`: 使用文档与网页演示文件
-- `ui/`: Streamlit 前端
+- `docs/local_rag_web_v3.0.html`: 主 Web UI（本地静态页面）
+- `docs/local_rag_web_v2.0.html`: 兼容保留版本
 - `storage/`: 任务状态存储
 - `wind_data/`: 风资源分析输入与输出
 - `artifacts/`: 大体积二进制或分发包
@@ -26,5 +27,5 @@
 ## 说明
 
 - 本次未改动任何 Python 业务代码。
-- 根目录保留 `README.md`、`requirements.txt`、`start_frontend.ps1` 作为常用入口。
+- 根目录保留 `README.md`、`requirements.txt` 作为常用入口。
 - `Data/` 与 `Models/` 为既有目录命名，暂不改名以避免路径兼容问题。

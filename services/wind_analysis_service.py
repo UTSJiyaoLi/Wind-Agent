@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+﻿"""风资源分析核心服务：数据清洗、统计计算、Weibull 拟合与图表生成。"""
+
+from __future__ import annotations
 
 import json
 from dataclasses import dataclass
@@ -339,3 +341,4 @@ class WindAnalysisService:
 def run_analysis(excel_path: str) -> WindAnalysisOutput:
     payload = WindAnalysisInput(excel_path=excel_path)
     return WindAnalysisService().analyze(payload)
+

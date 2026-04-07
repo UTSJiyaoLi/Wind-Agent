@@ -1,4 +1,6 @@
-﻿import argparse
+﻿"""底层检索工具函数：Milvus 混合检索、候选融合、元数据装配等通用能力。"""
+
+import argparse
 import json
 import sys
 import time
@@ -9,6 +11,22 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
+
+# 兼容某些容器中 FlagEmbedding 与 transformers 的版本差异。
+try:
+    from transformers.models.gemma2 import modeling_gemma2 as _gemma2_modeling
+
+    for _name in (
+        "GEMMA2_START_DOCSTRING",
+        "GEMMA2_INPUTS_DOCSTRING",
+        "GEMMA2_RETURN_INTRODUCTION",
+        "GEMMA2_GENERATION_EXAMPLE",
+    ):
+        if not hasattr(_gemma2_modeling, _name):
+            setattr(_gemma2_modeling, _name, "")
+except Exception:
+    pass
+
 from FlagEmbedding import BGEM3FlagModel
 from pymilvus import AnnSearchRequest, MilvusClient, RRFRanker
 
@@ -411,3 +429,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

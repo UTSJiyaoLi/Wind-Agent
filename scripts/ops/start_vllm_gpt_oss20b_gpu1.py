@@ -1,3 +1,5 @@
+﻿"""远端 vLLM 服务拉起脚本（GPU 节点运维用途）。"""
+
 import os
 import shlex
 
@@ -33,3 +35,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

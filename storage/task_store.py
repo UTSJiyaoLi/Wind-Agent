@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+﻿"""任务状态存储与落盘管理，支持任务创建、更新与查询。"""
+
+from __future__ import annotations
 
 import json
 import threading
@@ -84,3 +86,4 @@ class TaskStore:
 
 
 TASK_STORE = TaskStore()
+

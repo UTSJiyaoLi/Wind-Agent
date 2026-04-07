@@ -1,3 +1,5 @@
+﻿"""离线回归指标评估脚本。"""
+
 import argparse
 import json
 from pathlib import Path
@@ -158,3 +160,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

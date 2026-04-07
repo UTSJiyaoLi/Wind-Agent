@@ -1,4 +1,6 @@
-﻿import argparse
+﻿"""将风电文档数据向量化并写入 Milvus 的入库脚本。"""
+
+import argparse
 import hashlib
 import json
 import sys
@@ -602,3 +604,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

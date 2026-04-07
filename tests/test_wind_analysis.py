@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+﻿"""风资源分析服务与工具输出的单元测试。"""
+
+from pathlib import Path
 
 import pandas as pd
 
@@ -42,3 +44,4 @@ def test_run_analysis_missing_required_columns(tmp_path: Path):
     assert result.data is None
     assert result.warnings
     assert "Missing required columns" in result.warnings[0]
+

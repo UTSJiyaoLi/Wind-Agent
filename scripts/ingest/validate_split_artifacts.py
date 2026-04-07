@@ -1,4 +1,6 @@
-﻿import argparse
+﻿"""校验切分产物与入库前中间数据完整性的脚本。"""
+
+import argparse
 import json
 import random
 from pathlib import Path
@@ -89,3 +91,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

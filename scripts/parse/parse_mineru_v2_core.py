@@ -1,3 +1,5 @@
+﻿"""MinerU v2 解析核心实现与公共处理逻辑。"""
+
 import copy
 import hashlib
 import json
@@ -772,3 +774,4 @@ def summarize_docs(docs: list[Document]) -> dict[str, Any]:
         "table_count": sum(len(doc.metadata.get("tables_info", [])) for doc in page_docs),
         "equation_count": sum(len(doc.metadata.get("equations_info", [])) for doc in page_docs),
     }
+

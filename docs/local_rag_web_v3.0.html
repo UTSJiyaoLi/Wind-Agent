@@ -551,6 +551,10 @@
           refs.ragBox.textContent = JSON.stringify(
             {
               retrieval_metrics: resp?.retrieval_metrics || {},
+              agentic_trace: resp?.agentic_trace || [],
+              agentic_grades: resp?.agentic_grades || {},
+              agentic_actions: resp?.agentic_actions || [],
+              decomposition: resp?.decomposition || {},
               citations: resp?.citations || [],
               media_refs: resp?.media_refs || [],
               preview_images: resp?.preview_images || [],

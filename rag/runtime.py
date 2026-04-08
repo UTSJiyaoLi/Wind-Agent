@@ -114,6 +114,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-context-orchestration", action="store_true", default=_strtobool(os.getenv("RAG_ENABLE_CONTEXT_ORCHESTRATION", "true")))
     parser.add_argument("--context-budget-strategy", default=os.getenv("RAG_CONTEXT_BUDGET_STRATEGY", "dynamic"), choices=["dynamic", "fixed"])
     parser.add_argument("--context-min-items", type=int, default=int(os.getenv("RAG_CONTEXT_MIN_ITEMS", "3")))
+    parser.add_argument("--agentic-enabled", type=_strtobool, default=_strtobool(os.getenv("RAG_AGENTIC_ENABLED", "true")))
+    parser.add_argument("--agentic-max-retries", type=int, default=int(os.getenv("RAG_AGENTIC_MAX_RETRIES", "2")))
+    parser.add_argument("--agentic-min-top-score", type=float, default=float(os.getenv("RAG_AGENTIC_MIN_TOP_SCORE", "0.58")))
+    parser.add_argument("--agentic-min-coverage", type=float, default=float(os.getenv("RAG_AGENTIC_MIN_COVERAGE", "0.55")))
+    parser.add_argument("--agentic-retry-topk-step", type=int, default=int(os.getenv("RAG_AGENTIC_RETRY_TOPK_STEP", "2")))
+    parser.add_argument("--agentic-max-topk", type=int, default=int(os.getenv("RAG_AGENTIC_MAX_TOPK", "10")))
+    parser.add_argument("--agentic-max-subquestions", type=int, default=int(os.getenv("RAG_AGENTIC_MAX_SUBQUESTIONS", "3")))
     parser.add_argument(
         "--system-prompt",
         default=os.getenv(

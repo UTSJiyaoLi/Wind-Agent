@@ -683,14 +683,35 @@ def retrieve_contexts(runtime: Any, query: str, retrieval_cfg: dict[str, Any]) -
         )
         orchestration_info["enabled"] = True
 
+    top_hit_score = float(contexts[0].get("score") or 0.0) if contexts else 0.0
+    second_hit_score = float(contexts[1].get("score") or 0.0) if len(contexts) > 1 else 0.0
+    score_gap = top_hit_score - second_hit_score
+    context_count = len(contexts)
+    query_candidate_count = len(query_candidates)
+    normalized_top = top_hit_score if top_hit_score <= 1.0 else top_hit_score / (top_hit_score + 1.0)
+    coverage_estimate = max(
+        0.0,
+        min(
+            1.0,
+            0.45 * max(0.0, normalized_top)
+            + 0.35 * min(1.0, context_count / float(max(1, top_k)))
+            + 0.20 * min(1.0, query_candidate_count / 3.0),
+        ),
+    )
+
     metrics = {
         "collection": collection,
         "query_candidates": query_candidates,
+        "query_candidate_count": query_candidate_count,
         "coarse_dense_bge_size": len(bge_hits_all),
         "bm25_size": len(bm25_hits_all),
         "merge_size": len(merged_hits),
         "dedup_size": len(dedup_hits),
         "final_size": len(contexts),
+        "context_count": context_count,
+        "top_hit_score": round(top_hit_score, 6),
+        "score_gap": round(score_gap, 6),
+        "coverage_estimate": round(float(coverage_estimate), 4),
         "hydration_attempted": hydration_attempted,
         "hydrated_count": hydration_hit,
         "hydrated_rate": round(float(hydration_hit) / float(len(contexts) or 1), 4),

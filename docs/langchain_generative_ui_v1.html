@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -103,12 +103,18 @@
       <h2>Raw Response</h2>
       <pre id="raw" class="mono">{}</pre>
     </section>
+
+    <section class="card">
+      <h2>Runtime</h2>
+      <pre id="runtime" class="mono">{"client_elapsed_ms":"--","server_elapsed_seconds":"--","finished_at":"--"}</pre>
+    </section>
   </div>
 
   <script>
     "use strict";
     const $ = (id) => document.getElementById(id);
     let lastResp = null;
+    let lastClientElapsedMs = null;
 
     function setStatus(msg) { $("status").textContent = msg; }
     function trimSlash(v) { return (v || "").trim().replace(/\/+$/, ""); }
@@ -136,6 +142,16 @@
         },
         retrieval_config: {
           top_k: Number($("topK").value || 4)
+        },
+        agentic: {
+          enabled: true,
+          max_retries: 2,
+          min_top_score: 0.58,
+          min_coverage: 0.55,
+          retry_topk_step: 2,
+          max_topk: 10,
+          decompose_enabled: true,
+          max_subquestions: 3
         }
       };
       if (model) payload.model = model;
@@ -178,6 +194,13 @@
           card.appendChild(p);
         } else if (b.type === "meta" || b.type === "metrics") {
           card.appendChild(renderKv(b.items || {}));
+        } else if (b.type === "agentic_grades") {
+          card.appendChild(renderKv(b.data || {}));
+        } else if (b.type === "agentic_trace_timeline" || b.type === "subquestions") {
+          const p = document.createElement("pre");
+          p.className = "mono";
+          p.textContent = JSON.stringify(b.items || [], null, 2);
+          card.appendChild(p);
         } else if (b.type === "json") {
           const p = document.createElement("pre");
           p.className = "mono";
@@ -251,6 +274,7 @@
       const payload = buildPayload();
       if (!payload.messages[1].content) { setStatus("User prompt is required"); return; }
       setStatus("Requesting...");
+      const startedAt = performance.now();
       const out = await fetchJson(backend + "/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -262,7 +286,17 @@
         return;
       }
       lastResp = out.json || {};
+      lastClientElapsedMs = Math.round(performance.now() - startedAt);
       $("raw").textContent = JSON.stringify(lastResp, null, 2);
+      $("runtime").textContent = JSON.stringify(
+        {
+          client_elapsed_ms: lastClientElapsedMs,
+          server_elapsed_seconds: lastResp?.elapsed_seconds ?? "--",
+          finished_at: new Date().toISOString(),
+        },
+        null,
+        2
+      );
       renderBlocks(lastResp.ui_blocks, lastResp);
       setStatus("OK mode=" + String(lastResp.mode || payload.mode));
     }

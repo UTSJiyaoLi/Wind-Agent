@@ -206,4 +206,141 @@ def test_handle_chat_request_auto_mode_routes_to_llm_direct_for_general_query() 
     assert payload["answer"] == "direct-answer"
 
 
+def test_agentic_retrieve_retries_when_low_scores() -> None:
+    req = {
+        "mode": "rag",
+        "provider": "vllm",
+        "messages": [{"role": "user", "content": "风电尾流模型是什么"}],
+        "generation_config": {},
+        "retrieval_config": {"top_k": 2},
+        "agentic": {"enabled": True, "max_retries": 2, "min_top_score": 0.9, "min_coverage": 0.9},
+    }
+    calls = {"n": 0}
+
+    def _retrieve(*_args):
+        calls["n"] += 1
+        i = calls["n"]
+        return (
+            [{"rank": 1, "doc_id": f"d{i}", "chunk_id": f"c{i}", "score": 0.1, "text": "wake text"}],
+            [{"rank": 1, "doc_id": f"d{i}", "chunk_id": f"c{i}", "score": 0.1, "text": "wake text"}],
+            {
+                "final_size": 1,
+                "query_candidate_count": 1,
+                "top_hit_score": 0.1,
+                "score_gap": 0.0,
+                "coverage_estimate": 0.1,
+                "context_count": 1,
+            },
+        )
+
+    status, payload = handle_chat_request(
+        request_path="/api/retrieve",
+        req=req,
+        runtime=_runtime(),
+        run_wind_agent_flow=None,
+        call_vllm_chat=lambda **_: "unused",
+        retrieve_contexts=_retrieve,
+        build_citations_and_media=lambda *_: ([{"index": "CTX1"}], [{"index": "CTX1"}]),
+        build_preview_images=lambda *_: [],
+        format_contexts_for_prompt=lambda *_: "",
+        summarize_media_for_prompt=lambda *_: "",
+        render_citation_index=lambda *_: "",
+    )
+
+    assert status == 200
+    assert calls["n"] == 3
+    assert payload["mode"] == "rag"
+    assert len(payload.get("agentic_actions", [])) == 2
+    assert any(x.get("type") == "retry_retrieve" for x in payload.get("agentic_trace", []))
+
+
+def test_agentic_retrieve_no_retry_when_good_scores() -> None:
+    req = {
+        "mode": "rag",
+        "provider": "vllm",
+        "messages": [{"role": "user", "content": "风电尾流模型是什么"}],
+        "generation_config": {},
+        "retrieval_config": {"top_k": 2},
+        "agentic": {"enabled": True, "max_retries": 2, "min_top_score": 0.5, "min_coverage": 0.5},
+    }
+    calls = {"n": 0}
+
+    def _retrieve(*_args):
+        calls["n"] += 1
+        return (
+            [{"rank": 1, "doc_id": "d1", "chunk_id": "c1", "score": 0.9, "text": "wake text"}],
+            [{"rank": 1, "doc_id": "d1", "chunk_id": "c1", "score": 0.9, "text": "wake text"}],
+            {
+                "final_size": 1,
+                "query_candidate_count": 2,
+                "top_hit_score": 0.95,
+                "score_gap": 0.2,
+                "coverage_estimate": 0.9,
+                "context_count": 1,
+            },
+        )
+
+    status, payload = handle_chat_request(
+        request_path="/api/retrieve",
+        req=req,
+        runtime=_runtime(),
+        run_wind_agent_flow=None,
+        call_vllm_chat=lambda **_: "unused",
+        retrieve_contexts=_retrieve,
+        build_citations_and_media=lambda *_: ([{"index": "CTX1"}], [{"index": "CTX1"}]),
+        build_preview_images=lambda *_: [],
+        format_contexts_for_prompt=lambda *_: "",
+        summarize_media_for_prompt=lambda *_: "",
+        render_citation_index=lambda *_: "",
+    )
+
+    assert status == 200
+    assert calls["n"] == 1
+    assert payload.get("agentic_actions", []) == []
+
+
+def test_agentic_decomposition_for_compound_query() -> None:
+    req = {
+        "mode": "rag",
+        "provider": "vllm",
+        "messages": [{"role": "user", "content": "请分别分析风速分布以及尾流影响，并给出建议"}],
+        "generation_config": {},
+        "retrieval_config": {"top_k": 2},
+        "agentic": {"enabled": True, "decompose_enabled": True, "max_subquestions": 3},
+    }
+
+    def _retrieve(*_args):
+        return (
+            [{"rank": 1, "doc_id": "d1", "chunk_id": "c1", "score": 0.9, "text": "wake text"}],
+            [{"rank": 1, "doc_id": "d1", "chunk_id": "c1", "score": 0.9, "text": "wake text"}],
+            {
+                "final_size": 1,
+                "query_candidate_count": 2,
+                "top_hit_score": 0.95,
+                "score_gap": 0.2,
+                "coverage_estimate": 0.9,
+                "context_count": 1,
+            },
+        )
+
+    status, payload = handle_chat_request(
+        request_path="/api/chat",
+        req=req,
+        runtime=_runtime(),
+        run_wind_agent_flow=None,
+        call_vllm_chat=lambda **_: "sub-answer [CTX1]",
+        retrieve_contexts=_retrieve,
+        build_citations_and_media=lambda *_: ([{"index": "CTX1"}], [{"index": "CTX1"}]),
+        build_preview_images=lambda *_: [],
+        format_contexts_for_prompt=lambda *_: "ctx",
+        summarize_media_for_prompt=lambda *_: "media",
+        render_citation_index=lambda *_: "idx",
+    )
+
+    assert status == 200
+    assert payload["mode"] == "rag"
+    assert payload.get("decomposition", {}).get("triggered") is True
+    assert len(payload.get("decomposition", {}).get("subquestions", [])) >= 2
+
+
 

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
-from graph.nodes.agent import answer_synthesizer, input_preprocess, intent_router, tool_executor, workflow_planner
+from graph.nodes.agent import answer_synthesizer, input_preprocess, intent_router, rag_executor, tool_executor, workflow_planner
 from graph.nodes.wind_analysis import run_analysis_tool, should_continue, summarize, validate_input
 from graph.state import AgentFlowState, WindFlowState
 
@@ -30,13 +30,15 @@ def build_wind_agent_graph():
     graph.add_node("input_preprocess", input_preprocess)
     graph.add_node("intent_router", intent_router)
     graph.add_node("workflow_planner", workflow_planner)
+    graph.add_node("rag_executor", rag_executor)
     graph.add_node("tool_executor", tool_executor)
     graph.add_node("answer_synthesizer", answer_synthesizer)
 
     graph.set_entry_point("input_preprocess")
     graph.add_edge("input_preprocess", "intent_router")
     graph.add_edge("intent_router", "workflow_planner")
-    graph.add_edge("workflow_planner", "tool_executor")
+    graph.add_edge("workflow_planner", "rag_executor")
+    graph.add_edge("rag_executor", "tool_executor")
     graph.add_edge("tool_executor", "answer_synthesizer")
     graph.add_edge("answer_synthesizer", END)
     return graph.compile()
@@ -78,8 +80,12 @@ def run_wind_agent_flow(
         "success": not bool(result.get("error")),
         "request": request,
         "resolved_excel_path": result.get("file_path"),
+        "resolved_excel_paths": result.get("file_paths", []),
+        "resolved_data_folder": result.get("data_folder"),
         "summary": result.get("final_answer", ""),
         "analysis": result.get("tool_result"),
+        "rag_result": result.get("rag_result"),
+        "workflow_results": result.get("workflow_results", []),
         "trace": result.get("trace", []),
         "error": result.get("error"),
     }

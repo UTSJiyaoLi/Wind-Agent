@@ -51,8 +51,12 @@ class AgentChatResponse(BaseModel):
     success: bool
     request: str
     resolved_excel_path: Optional[str] = None
+    resolved_excel_paths: List[str] = Field(default_factory=list)
+    resolved_data_folder: Optional[str] = None
     summary: str = ""
     analysis: Optional[Dict[str, Any]] = None
+    rag_result: Optional[Dict[str, Any]] = None
+    workflow_results: List[Dict[str, Any]] = Field(default_factory=list)
     trace: List[AgentTraceStep] = Field(default_factory=list)
     error: Optional[str] = None
 

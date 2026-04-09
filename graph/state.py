@@ -16,6 +16,8 @@ class AgentFlowState(TypedDict, total=False):
     user_query: str
     session_id: str
     file_path: Optional[str]
+    file_paths: List[str]
+    data_folder: Optional[str]
 
     intent: str
     intent_confidence: float

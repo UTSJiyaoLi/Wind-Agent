@@ -48,6 +48,7 @@ class AgentTraceStep(BaseModel):
 
 
 class AgentChatResponse(BaseModel):
+    request_id: Optional[str] = None
     success: bool
     request: str
     resolved_excel_path: Optional[str] = None

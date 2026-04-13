@@ -5,24 +5,29 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
 
-from tools.wind_analysis_tool import build_wind_analysis_tool
-
 from graph.state import AgentFlowState, TraceDetails
+from graph.tool_registry import TOOL_REGISTRY
+from graph.workflow_contract import build_default_plan, normalize_workflow_plan
 
 
 def trace(state: AgentFlowState, step: str, status: str, message: str, details: TraceDetails = None) -> None:
+    merged_details = dict(details or {})
+    if state.get("request_id"):
+        merged_details.setdefault("request_id", state.get("request_id"))
     events = list(state.get("trace", []))
     events.append(
         {
             "step": step,
             "status": status,
             "message": message,
-            "details": details or {},
+            "details": merged_details,
         }
     )
     state["trace"] = events
@@ -221,6 +226,25 @@ def _run_rag_query(state: AgentFlowState, query: str) -> dict[str, Any]:
     return output
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_step_result(*, step: dict[str, Any], status: str, data: dict[str, Any] | None = None, error: str | None = None, started_at: float | None = None) -> dict[str, Any]:
+    started = started_at if started_at is not None else time.time()
+    return {
+        "step": int(step.get("step", 0) or 0),
+        "type": str(step.get("type", "")),
+        "name": str(step.get("name", "")),
+        "tool": step.get("tool"),
+        "status": status,
+        "started_at": _utc_now_iso(),
+        "duration_ms": int(max(0.0, (time.time() - started) * 1000.0)),
+        "data": data or {},
+        "error": error,
+    }
+
+
 def input_preprocess(state: AgentFlowState) -> AgentFlowState:
     query = state.get("user_query") or ""
     if not query:
@@ -236,6 +260,7 @@ def input_preprocess(state: AgentFlowState) -> AgentFlowState:
     file_path = file_paths[0] if file_paths else None
 
     next_state: AgentFlowState = {
+        "request_id": str(state.get("request_id") or ""),
         "user_query": query,
         "session_id": str(state.get("session_id") or "default"),
         "file_path": file_path,
@@ -255,6 +280,7 @@ def input_preprocess(state: AgentFlowState) -> AgentFlowState:
         status="ok",
         message="Captured user query and resolved excel files/folder.",
         details={
+            "request_id": next_state.get("request_id"),
             "file_path": file_path,
             "file_paths_count": len(file_paths),
             "data_folder": data_folder,
@@ -328,6 +354,7 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
 def workflow_planner(state: AgentFlowState) -> AgentFlowState:
     next_state: AgentFlowState = dict(state)
     intent = state.get("intent", "rag")
+    default_plan = build_default_plan(intent)
 
     if intent == "workflow":
         prompt = (
@@ -353,19 +380,13 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
                 temperature=0.0,
                 max_tokens=300,
             )
-            plan = json.loads(raw)
-            if not isinstance(plan, list):
-                raise ValueError("workflow plan must be a list")
+            plan = normalize_workflow_plan(json.loads(raw))
             next_state["workflow_plan"] = plan
             trace(next_state, "workflow_planner", "ok", "Built workflow plan from LLM.", {"plan": plan})
             return next_state
         except Exception as exc:
             _append_warning(next_state, f"Workflow planner fallback used: {exc}")
-            next_state["workflow_plan"] = [
-                {"step": 1, "type": "rag", "name": "domain_knowledge"},
-                {"step": 2, "type": "tool", "name": "analyze_wind_resource"},
-                {"step": 3, "type": "llm", "goal": "summarize and provide recommendations"},
-            ]
+            next_state["workflow_plan"] = default_plan
             trace(
                 next_state,
                 "workflow_planner",
@@ -375,10 +396,7 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
             )
             return next_state
 
-    if intent == "tool":
-        next_state["workflow_plan"] = [{"step": 1, "type": "tool", "name": "analyze_wind_resource"}]
-    else:
-        next_state["workflow_plan"] = [{"step": 1, "type": "rag", "name": "domain_knowledge"}]
+    next_state["workflow_plan"] = default_plan
 
     trace(next_state, "workflow_planner", "ok", "Built workflow plan.", {"plan": next_state.get("workflow_plan", [])})
     return next_state
@@ -392,15 +410,32 @@ def rag_executor(state: AgentFlowState) -> AgentFlowState:
         return next_state
 
     try:
+        t0 = time.time()
         rag_result = _run_rag_query(next_state, str(state.get("user_query", "")))
         next_state["rag_result"] = rag_result
         results = list(next_state.get("workflow_results", []))
-        results.append({"type": "rag", "name": "domain_knowledge", "result": rag_result})
+        results.append(
+            _new_step_result(
+                step={"step": 1, "type": "rag", "name": "domain_knowledge"},
+                status="ok",
+                data={"rag_result": rag_result},
+                started_at=t0,
+            )
+        )
         next_state["workflow_results"] = results
         trace(next_state, "rag_executor", "ok", "Executed RAG endpoint.")
     except Exception as exc:
         next_state["rag_result"] = {"error": str(exc)}
         _append_warning(next_state, f"RAG execution fallback used: {exc}")
+        results = list(next_state.get("workflow_results", []))
+        results.append(
+            _new_step_result(
+                step={"step": 1, "type": "rag", "name": "domain_knowledge"},
+                status="error",
+                error=str(exc),
+            )
+        )
+        next_state["workflow_results"] = results
         trace(next_state, "rag_executor", "warn", "RAG execution fallback used.", {"reason": str(exc)})
     return next_state
 
@@ -412,27 +447,45 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
         trace(next_state, "tool_executor", "skip", "Skipped tool executor because intent is rag.")
         return next_state
 
-    plan = list(state.get("workflow_plan", []))
-    if not plan:
-        plan = [{"step": 1, "type": "tool", "name": "analyze_wind_resource"}]
+    try:
+        plan = normalize_workflow_plan(list(state.get("workflow_plan", [])) or build_default_plan(intent))
+    except Exception as exc:
+        _append_warning(next_state, f"Invalid workflow plan, fallback applied: {exc}")
+        plan = build_default_plan(intent)
+    next_state["workflow_plan"] = plan
 
     file_paths = list(state.get("file_paths", []))
-    tool = build_wind_analysis_tool()
 
     workflow_results = list(next_state.get("workflow_results", []))
     batch_results: list[dict[str, Any]] = []
 
     for item in plan:
         step_type = str(item.get("type", "")).strip().lower()
+        step_started = time.time()
 
         if step_type == "rag":
             try:
                 rag_result = _run_rag_query(next_state, str(state.get("user_query", "")))
                 next_state["rag_result"] = rag_result
-                workflow_results.append({"type": "rag", "name": item.get("name", "domain_knowledge"), "result": rag_result})
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="ok",
+                        data={"rag_result": rag_result},
+                        started_at=step_started,
+                    )
+                )
                 trace(next_state, "tool_executor", "ok", "Executed workflow rag step.", {"step": item})
             except Exception as exc:
                 _append_warning(next_state, f"Workflow rag step failed: {exc}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=str(exc),
+                        started_at=step_started,
+                    )
+                )
                 trace(next_state, "tool_executor", "warn", "Workflow rag step failed.", {"step": item, "reason": str(exc)})
             continue
 
@@ -455,39 +508,109 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
                     temperature=0.2,
                     max_tokens=220,
                 )
-                workflow_results.append({"type": "llm", "goal": item.get("goal"), "result": {"text": llm_text}})
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="ok",
+                        data={"goal": item.get("goal"), "text": llm_text},
+                        started_at=step_started,
+                    )
+                )
                 trace(next_state, "tool_executor", "ok", "Executed workflow llm step.", {"step": item})
             except Exception as exc:
                 _append_warning(next_state, f"Workflow llm step fallback used: {exc}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=str(exc),
+                        started_at=step_started,
+                    )
+                )
                 trace(next_state, "tool_executor", "warn", "Workflow llm step failed.", {"step": item, "reason": str(exc)})
             continue
 
         if step_type != "tool":
             _append_warning(next_state, f"Unsupported workflow step type: {step_type}")
+            workflow_results.append(
+                _new_step_result(
+                    step=item,
+                    status="error",
+                    error=f"unsupported step type: {step_type}",
+                    started_at=step_started,
+                )
+            )
             trace(next_state, "tool_executor", "warn", "Unsupported workflow step type.", {"step": item})
             continue
 
         if not file_paths:
             next_state["error"] = "Missing excel file path for tool execution."
             trace(next_state, "tool_executor", "error", next_state["error"])
+            workflow_results.append(
+                _new_step_result(
+                    step=item,
+                    status="error",
+                    error=next_state["error"],
+                    started_at=step_started,
+                )
+            )
             next_state["workflow_results"] = workflow_results
             return next_state
 
+        tool_name = str(item.get("tool") or item.get("name") or "analyze_wind_resource")
         for file_path in file_paths:
             path = Path(file_path)
             if not path.exists() or not path.is_file():
                 _append_warning(next_state, f"Excel file not found, skipped: {file_path}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=f"excel file not found: {file_path}",
+                        started_at=step_started,
+                    )
+                )
                 trace(next_state, "tool_executor", "warn", "Excel file missing, skipped.", {"file_path": file_path})
                 continue
 
-            next_state["selected_tool"] = "analyze_wind_resource"
+            next_state["selected_tool"] = tool_name
             next_state["tool_input"] = {"excel_path": str(path)}
-            raw = tool.invoke({"excel_path": str(path)})
-            output = json.loads(raw)
-            batch_item = {"excel_path": str(path.resolve()), "result": output}
-            batch_results.append(batch_item)
-            workflow_results.append({"type": "tool", "name": "analyze_wind_resource", "result": batch_item})
-            trace(next_state, "tool_executor", "ok", "Executed wind analysis tool.", {"excel_path": str(path.resolve())})
+            try:
+                output = TOOL_REGISTRY.execute(tool_name, {"excel_path": str(path)})
+                batch_item = {"tool": tool_name, "excel_path": str(path.resolve()), "result": output}
+                batch_results.append(batch_item)
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="ok",
+                        data=batch_item,
+                        started_at=step_started,
+                    )
+                )
+                trace(
+                    next_state,
+                    "tool_executor",
+                    "ok",
+                    "Executed wind analysis tool.",
+                    {"excel_path": str(path.resolve()), "tool": tool_name},
+                )
+            except Exception as exc:
+                _append_warning(next_state, f"Tool execution failed ({tool_name}): {exc}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=str(exc),
+                        started_at=step_started,
+                    )
+                )
+                trace(
+                    next_state,
+                    "tool_executor",
+                    "warn",
+                    "Tool execution failed.",
+                    {"excel_path": str(path.resolve()), "tool": tool_name, "reason": str(exc)},
+                )
 
     next_state["workflow_results"] = workflow_results
 

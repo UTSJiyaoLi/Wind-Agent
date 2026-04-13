@@ -514,6 +514,14 @@
       setStatus(refs.connStatus, "Config saved to localStorage", "ok");
     }
 
+    function applyUrlOverrides() {
+      try {
+        const url = new URL(window.location.href);
+        const backend = (url.searchParams.get("backend") || "").trim();
+        if (backend) refs.backendUrl.value = backend;
+      } catch (_) {}
+    }
+
     function loadConfig() {
       try {
         const raw = localStorage.getItem(STORE_KEY);
@@ -628,6 +636,7 @@
     $("btnSaveResult").addEventListener("click", saveResult);
 
     loadConfig();
+    applyUrlOverrides();
     refs.payloadBox.textContent = JSON.stringify(buildUnifiedPayload(), null, 2);
   </script>
 </body>

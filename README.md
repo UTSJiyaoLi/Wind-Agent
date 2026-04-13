@@ -9,26 +9,43 @@
 
 ## 一键操作
 
-### 1) 在远端启动后端（tmux + apptainer）
+### 1) 在远端启动 Wind 服务（tmux + apptainer）
 
 ```powershell
 .\scripts\ops\start_remote_rag_backend_gpu6000.cmd
 ```
 
-### 2) 本地开隧道并打开 Web UI
+或使用统一运维入口（仅管理 `wind-*` 会话，不触碰 fish 系统）：
+
+```powershell
+.\scripts\ops\wind_services.cmd status
+.\scripts\ops\wind_services.cmd start
+.\scripts\ops\wind_services.cmd health
+.\scripts\ops\wind_services.cmd restart
+.\scripts\ops\wind_services.cmd stop
+```
+
+### 2) 本地开隧道并打开 Web UI（自动选择本地空闲端口）
 
 ```powershell
 .\scripts\ops\start_rag_web_local.cmd
 ```
 
+可手动指定本地端口：
+
+```powershell
+.\scripts\ops\start_rag_web_local.cmd 19087
+```
+
 ### 3) Web UI 参数
 
 - `Mode`: `RAG` 或 `Wind Agent Tool`
-- `RAG Backend URL`: `http://127.0.0.1:8787`
+- `RAG Backend URL`: 启动脚本自动注入（默认本地随机空闲端口）
 
 ## WSL2 构建离线容器包（备用）
 
 你给定的构建目录是：
+
 - `\\wsl$\Ubuntu\home\lijiyao\container_build`
 
 在 WSL2 中执行：
@@ -39,6 +56,7 @@ bash scripts/ops/build_apptainer_in_wsl2.sh
 ```
 
 输出 tar 默认在：
+
 - `/home/lijiyao/container_build/artifacts/containers/wind-agent-offline_20260403.tar`
 
 上传到服务器并转成 `sif` 后，更新 `scripts/ops/start_remote_rag_backend_gpu6000.cmd` 的 `REMOTE_SIF` 路径。
@@ -84,11 +102,17 @@ curl -s -X POST http://127.0.0.1:8787/api/chat -H "Content-Type: application/jso
 - `OBS_TRACE_DIR=storage/traces`
 - `OBS_REDACTION_MODE=summary_id`
 
-LangSmith 变量仅做兼容预留（当前不启用上报）：
+启用 LangSmith 上报时使用以下变量：
 
 - `LANGSMITH_ENDPOINT`
 - `LANGSMITH_PROJECT`
 - `LANGSMITH_API_KEY`
+
+## 配置分层（建议）
+
+- 本地：复制 `.env.local.example` 为 `.env.local`（不入库）
+- 服务器：复制 `.env.server.example` 到服务器仓库根目录 `.env.server`（不入库）
+- 运维脚本优先读取环境变量，避免把敏感配置写入脚本正文
 
 ## 测试
 
@@ -96,4 +120,3 @@ LangSmith 变量仅做兼容预留（当前不启用上报）：
 conda activate rag_task
 pytest -q
 ```
-

@@ -13,6 +13,7 @@ class WindFlowState(TypedDict, total=False):
 
 
 class AgentFlowState(TypedDict, total=False):
+    request_id: str
     user_query: str
     session_id: str
     file_path: Optional[str]

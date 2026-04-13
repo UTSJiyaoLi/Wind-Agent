@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+try:
+    from langsmith import Client as _LangSmithClient
+    from langsmith.run_trees import RunTree as _LangSmithRunTree
+except Exception:
+    _LangSmithClient = None
+    _LangSmithRunTree = None
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -155,15 +162,104 @@ class JsonlTracer(BaseTracer):
 
 
 class LangSmithTracer(BaseTracer):
-    """Placeholder for future self-hosted/cloud LangSmith integration."""
+    backend = "langsmith"
 
-    backend = "langsmith_placeholder"
-
-    def __init__(self, *, enabled: bool, endpoint: str = "", project: str = ""):
-        # Placeholder keeps tracing disabled by default until real client integration.
-        self.enabled = bool(enabled and False)
+    def __init__(self, *, enabled: bool, endpoint: str = "", project: str = "", api_key: str = ""):
+        self.enabled = bool(enabled)
         self.endpoint = str(endpoint or "")
-        self.project = str(project or "")
+        self.project = str(project or "wind-agent-rag-eval")
+        self.api_key = str(api_key or "")
+        self._lock = threading.Lock()
+        self._roots: dict[str, Any] = {}
+        self._client = None
+        self._note = "ready"
+
+        if not self.enabled:
+            self._note = "disabled_by_config"
+            return
+
+        if _LangSmithClient is None or _LangSmithRunTree is None:
+            self.enabled = False
+            self._note = "langsmith_package_unavailable"
+            return
+        if not self.api_key:
+            self.enabled = False
+            self._note = "missing_api_key"
+            return
+
+        try:
+            kwargs: dict[str, Any] = {"api_key": self.api_key}
+            if self.endpoint:
+                kwargs["api_url"] = self.endpoint
+            self._client = _LangSmithClient(**kwargs)
+        except Exception as exc:
+            self.enabled = False
+            self._note = f"client_init_failed:{exc}"
+
+    def _ensure_root(self, trace_id: str) -> Any | None:
+        if not self.enabled or self._client is None or _LangSmithRunTree is None:
+            return None
+        key = str(trace_id or "")
+        with self._lock:
+            root = self._roots.get(key)
+            if root is not None:
+                return root
+            root = _LangSmithRunTree(
+                name="wind_agent_request",
+                run_type="chain",
+                project_name=self.project,
+                client=self._client,
+                inputs={"trace_id": key},
+                extra={"metadata": {"trace_id": key}},
+            )
+            root.post()
+            self._roots[key] = root
+            return root
+
+    def _finalize_root(self, trace_id: str, status: str) -> None:
+        key = str(trace_id or "")
+        with self._lock:
+            root = self._roots.pop(key, None)
+        if root is None:
+            return
+        try:
+            root.end(outputs={"status": status, "trace_id": key})
+            root.patch()
+        except Exception:
+            return
+
+    def _create_span_run(self, trace_id: str, name: str, metadata: dict[str, Any]) -> Any | None:
+        root = self._ensure_root(trace_id)
+        if root is None:
+            return None
+        try:
+            run = root.create_child(
+                name=name,
+                run_type="chain",
+                inputs={"trace_id": trace_id},
+                extra={"metadata": metadata},
+            )
+            run.post()
+            return run
+        except Exception:
+            return None
+
+    def span(self, trace_id: str, name: str, metadata: dict[str, Any] | None = None) -> _NullSpan | "_LangSmithSpan":
+        if not self.enabled:
+            return _NullSpan()
+        return _LangSmithSpan(self, trace_id=trace_id, name=name, metadata=metadata or {})
+
+    def event(self, trace_id: str, name: str, metadata: dict[str, Any] | None = None) -> None:
+        if not self.enabled:
+            return
+        run = self._create_span_run(trace_id, f"event:{name}", metadata or {})
+        if run is None:
+            return
+        try:
+            run.end(outputs={"event": name, "metadata": metadata or {}, "status": "ok"})
+            run.patch()
+        except Exception:
+            return
 
     def info(self) -> dict[str, Any]:
         return {
@@ -171,8 +267,39 @@ class LangSmithTracer(BaseTracer):
             "enabled": bool(self.enabled),
             "endpoint": self.endpoint,
             "project": self.project,
-            "note": "placeholder_only",
+            "note": self._note,
         }
+
+
+class _LangSmithSpan:
+    def __init__(self, tracer: LangSmithTracer, trace_id: str, name: str, metadata: dict[str, Any] | None = None):
+        self.tracer = tracer
+        self.trace_id = str(trace_id or "")
+        self.name = str(name or "span")
+        self.metadata: dict[str, Any] = dict(metadata or {})
+        self.run = None
+
+    def add(self, data: dict[str, Any]) -> None:
+        self.metadata.update(data or {})
+
+    def __enter__(self) -> "_LangSmithSpan":
+        self.run = self.tracer._create_span_run(self.trace_id, self.name, self.metadata)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, _tb: Any) -> bool:
+        status = "error" if exc is not None else "ok"
+        if self.run is not None:
+            try:
+                out: dict[str, Any] = {"status": status, "metadata": self.metadata}
+                if exc is not None:
+                    out["error"] = str(exc)
+                self.run.end(outputs=out)
+                self.run.patch()
+            except Exception:
+                pass
+        if self.name == "request":
+            self.tracer._finalize_root(self.trace_id, status)
+        return False
 
 
 def build_tracer_from_args(args: Any) -> BaseTracer:
@@ -185,6 +312,7 @@ def build_tracer_from_args(args: Any) -> BaseTracer:
             enabled=enabled,
             endpoint=str(getattr(args, "langsmith_endpoint", "") or ""),
             project=str(getattr(args, "langsmith_project", "") or ""),
+            api_key=str(getattr(args, "langsmith_api_key", "") or ""),
         )
     return JsonlTracer(
         enabled=enabled,

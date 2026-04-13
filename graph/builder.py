@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
 from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
@@ -65,7 +66,9 @@ def run_wind_agent_flow(
     llm_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     app = build_wind_agent_graph()
+    request_id = uuid4().hex
     state: AgentFlowState = {
+        "request_id": request_id,
         "user_query": request,
         "session_id": "default",
     }
@@ -77,6 +80,7 @@ def run_wind_agent_flow(
     result = app.invoke(state)
 
     return {
+        "request_id": result.get("request_id", request_id),
         "success": not bool(result.get("error")),
         "request": request,
         "resolved_excel_path": result.get("file_path"),

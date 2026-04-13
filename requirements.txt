@@ -21,4 +21,3 @@ langsmith==0.3.23
 sentence-transformers==3.4.1
 orjson==3.10.16
 ragas==0.2.12
-#  /share/home/lijiyao/CCCC/Wind-Agent/wind_data

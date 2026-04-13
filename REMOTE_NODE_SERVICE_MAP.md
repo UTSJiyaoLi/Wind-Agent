@@ -35,6 +35,7 @@
 旧路径 `/share/home/lijiyao/CCCC/wind-agent-offline_20260403.sif` 当前不可用。
 
 Wind-Agent 相关会话已统一改为：
+
 - 镜像：`/share/home/lijiyao/CCCC/apptainer/inforhub.sif`
 - 启动参数：`apptainer exec --bind /share/home/lijiyao/CCCC:/share/home/lijiyao/CCCC ...`
 

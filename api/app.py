@@ -67,5 +67,3 @@ def _run_task(task_id: str, excel_path: str) -> None:
         TASK_STORE.mark_success(task_id, flow_result)
     except Exception as exc:  # noqa: BLE001
         TASK_STORE.mark_failed(task_id, str(exc))
-
-

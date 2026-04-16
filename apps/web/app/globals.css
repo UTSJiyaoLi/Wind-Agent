@@ -175,15 +175,33 @@ button, input, textarea, select {
 }
 
 .markdown-body table {
+  display: block;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
-  margin: 10px 0;
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #1d1d1d;
 }
 
 .markdown-body th,
 .markdown-body td {
   border: 1px solid var(--line);
   padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+  min-width: 120px;
+}
+
+.markdown-body thead th {
+  background: #252525;
+  font-weight: 600;
+}
+
+.markdown-body tbody tr:nth-child(even) td {
+  background: #212121;
 }
 
 .block-caption,

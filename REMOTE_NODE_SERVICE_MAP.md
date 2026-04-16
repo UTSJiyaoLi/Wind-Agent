@@ -1,7 +1,7 @@
 ﻿# 远端 CPU/GPU 节点服务清单
 
-更新时间：2026-04-09 16:49 (Asia/Shanghai)
-采集方式：`ssh lijiyao@gpu6000` + `tmux ls` + `tmux list-panes` + `ss -ltnp`。
+更新时间：2026-04-16 15:08 (Asia/Shanghai)
+采集方式：`ssh -J lijiyao@172.30.3.166 lijiyao@gpu6000` + `tmux ls` + `tmux list-panes` + `curl /health` + 本地 `Get-NetTCPConnection/Win32_Process`。
 
 ## 1) gpu6000 当前会话
 
@@ -15,6 +15,11 @@
 | `wind-agent-api` | Wind-Agent FastAPI | `inforhub.sif` + bind -> `uvicorn :8005` |
 | `wind-agent-ui` | Wind-Agent Streamlit 前端 | `inforhub.sif` + bind -> `streamlit :8501` |
 | `wind-rag-unified` | Wind RAG/Agent 统一后端 | `inforhub.sif` + bind -> `rag_local_api.py :8787` |
+
+2026-04-16 运维变更记录：
+
+- 已定向重启 `wind-agent-api` 与 `wind-rag-unified`（用于部署 RAG 流式与子问题并行改动）。
+- 未改动 `fish-*` 相关会话（鱼病监测服务保持运行）。
 
 ## 2) gpu6000 端口快照
 
@@ -40,3 +45,11 @@ Wind-Agent 相关会话已统一改为：
 - 启动参数：`apptainer exec --bind /share/home/lijiyao/CCCC:/share/home/lijiyao/CCCC ...`
 
 这样可以保证容器内能访问 `/share/home/lijiyao/CCCC/Wind-Agent` 代码与数据目录。
+
+## 4) 本地前端映射（Windows 开发机）
+
+- 本地 `127.0.0.1:3005` 当前进程链路：
+  - `node next dev -p 3005`
+  - 父进程命令：`cmd /k ""C:\wind-agent\tmp_start_react_next_chatui.cmd""`
+- 结论：当前 3005 ChatUI 是由 `tmp_start_react_next_chatui.cmd` 拉起（该脚本由 `wind_agent_chatui.cmd` 生成并启动）。
+- 保留建议：不要删除 `tmp_start_react_next_chatui.cmd`，避免影响现有 3005 服务。

@@ -756,7 +756,11 @@ export default function Page() {
             <article className="msg-row assistant-row">
               <div className="avatar">A</div>
               <div className="msg-card markdown-message streaming">
-                <pre className="stream-pre">{streamedAnswer}</pre>
+                <div className="markdown-body plain-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {String(streamedAnswer || "")}
+                  </ReactMarkdown>
+                </div>
               </div>
             </article>
           ) : null}
@@ -786,11 +790,16 @@ export default function Page() {
                     <div className="gallery gallery-chat">
                       {(Array.isArray(b.items) ? b.items : []).map((it: any, idx: number) => {
                         const src = trimSlash(backendUrl) + String(it?.asset_url || "");
+                        const indices = Array.isArray(it?.indices)
+                          ? it.indices.map((x: any) => String(x || "").trim()).filter(Boolean)
+                          : [];
+                        const indexLabel = indices.length ? `[${indices.join(", ")}] ` : it?.index ? `[${String(it.index)}] ` : "";
+                        const titleText = String(it?.title || "image");
                         return (
                           <div key={`${i}-g-${idx}`} className="gallery-card">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={src} alt={String(it?.title || "image")} />
-                            <div className="gallery-title">{String(it?.title || "image")}</div>
+                            <img src={src} alt={titleText} />
+                            <div className="gallery-title">{`${indexLabel}${titleText}`}</div>
                           </div>
                         );
                       })}

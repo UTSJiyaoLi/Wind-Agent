@@ -3,6 +3,7 @@
 import json
 import mimetypes
 import os
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -281,6 +282,21 @@ def build_app_handler(runtime: Runtime):
 
                     answer = "".join(answer_parts)
                     citations = retrieve_payload.get("citations") or []
+                    refs = {x.upper() for x in re.findall(r"\[?(CTX\d+)\]?", answer, flags=re.IGNORECASE)}
+                    if refs:
+                        citations = [c for c in citations if str(c.get("index") or "").upper() in refs]
+                        previews = []
+                        for item in (retrieve_payload.get("preview_images") or []):
+                            if not isinstance(item, dict):
+                                continue
+                            idxs = item.get("indices")
+                            if isinstance(idxs, list) and idxs:
+                                keys = {str(x).upper() for x in idxs}
+                            else:
+                                keys = {str(item.get("index") or "").upper()}
+                            if keys & refs:
+                                previews.append(item)
+                        retrieve_payload["preview_images"] = previews
                     if citations:
                         appendix = f"\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"
                         answer += appendix

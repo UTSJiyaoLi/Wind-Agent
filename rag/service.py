@@ -174,6 +174,27 @@ def _extract_ctx_ids(answer: str) -> list[str]:
     return sorted(set(re.findall(r"\[?(CTX\d+)\]?", str(answer or ""), flags=re.IGNORECASE)))
 
 
+def _filter_outputs_by_answer_refs(
+    answer: str,
+    citations: list[dict[str, Any]],
+    preview_images: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    refs = {x.upper() for x in _extract_ctx_ids(answer)}
+    if not refs:
+        return citations, preview_images
+    filtered_citations = [c for c in citations if str(c.get("index") or "").upper() in refs]
+    filtered_previews: list[dict[str, Any]] = []
+    for item in preview_images:
+        idxs = item.get("indices")
+        if isinstance(idxs, list) and idxs:
+            keys = {str(x).upper() for x in idxs}
+        else:
+            keys = {str(item.get("index") or "").upper()}
+        if keys & refs:
+            filtered_previews.append(item)
+    return filtered_citations, filtered_previews
+
+
 def _grade_answer_rules(answer: str, prompt_contexts: list[dict[str, Any]]) -> dict[str, Any]:
     ans = str(answer or "")
     ans_tokens = _tokenize(ans)
@@ -904,6 +925,7 @@ def handle_chat_request(
                     model=model,
                     timeout_seconds=runtime.args.llm_timeout_seconds,
                 )
+                citations, preview_images = _filter_outputs_by_answer_refs(answer, citations, preview_images)
                 answer = f"{answer}\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"
                 avg_retrieval = 0.0
                 avg_grounding = 0.0
@@ -1057,6 +1079,7 @@ def handle_chat_request(
                     "source": answer_grade.get("source"),
                 },
             )
+            citations, preview_images = _filter_outputs_by_answer_refs(answer, citations, preview_images)
             answer = f"{answer}\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"
             return 200, {
                 "ok": True,

@@ -1,10 +1,13 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Layer, Map as LeafletMap } from "leaflet";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import "leaflet/dist/leaflet.css";
+import "katex/dist/katex.min.css";
 
 type UiBlock = {
   type: string;
@@ -188,18 +191,6 @@ function extractFigureKey(text: string): string | null {
   return m[1].replace(".", "-");
 }
 
-function extractCitedFigureKeys(text: string): Set<string> {
-  const set = new Set<string>();
-  const s = String(text || "");
-  const re = /(?:图|fig(?:ure)?\.?)\s*([0-9]+(?:[-.][0-9]+)?)/gi;
-  let m: RegExpExecArray | null = re.exec(s);
-  while (m) {
-    if (m[1]) set.add(m[1].replace(".", "-"));
-    m = re.exec(s);
-  }
-  return set;
-}
-
 function toZhCaption(rawTitle: string): string {
   const key = extractFigureKey(rawTitle);
   if (key) return `图${key}`;
@@ -244,6 +235,7 @@ export default function Page() {
   const [showSettings, setShowSettings] = useState(false);
 
   const [streamedAnswer, setStreamedAnswer] = useState("");
+  const [lastQuestion, setLastQuestion] = useState("");
   const [response, setResponse] = useState<ChatResponse | null>(null);
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [rawText, setRawText] = useState("{}");
@@ -258,8 +250,9 @@ export default function Page() {
   const mapLayersRef = useRef<Layer[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const hasResultSection = useMemo(() => !!response || !!streamedAnswer || blocks.length > 0, [response, streamedAnswer, blocks]);
+  const hasResultSection = useMemo(() => !!response || !!streamedAnswer || blocks.length > 0 || !!lastQuestion, [response, streamedAnswer, blocks, lastQuestion]);
   const hasMapSection = useMemo(() => !!mapSpec, [mapSpec]);
   const shouldShowTyphoonPanel = mode === "wind_agent" || mode === "typhoon_model";
   const showRagPanel = useMemo(() => mode === "rag" || mode === "auto" || !!response?.retrieval_metrics, [mode, response?.retrieval_metrics]);
@@ -292,21 +285,14 @@ export default function Page() {
         return id === "save_result" || id === "copy_request_id";
       });
     });
-    const galleries = effectiveBlocks.filter((b) => b.type === "gallery");
-    const nonGallery = effectiveBlocks.filter((b) => b.type !== "gallery");
+    const filteredBlocks = effectiveBlocks.filter((b) => b.type !== "actions");
+    const galleries = filteredBlocks.filter((b) => b.type === "gallery");
+    const nonGallery = filteredBlocks.filter((b) => b.type !== "gallery");
     if (!galleries.length) return nonGallery;
     const firstMsgIdx = nonGallery.findIndex((b) => b.type === "message");
     if (firstMsgIdx < 0) return [...galleries, ...nonGallery];
     return [...nonGallery.slice(0, firstMsgIdx + 1), ...galleries, ...nonGallery.slice(firstMsgIdx + 1)];
   }, [mainBlocks]);
-
-  const citedFigureKeys = useMemo(() => {
-    const msg = displayBlocks
-      .filter((b) => b.type === "message")
-      .map((b) => String(b.content || ""))
-      .join("\n");
-    return extractCitedFigureKeys(msg);
-  }, [displayBlocks]);
 
   function setUiStatus(text: string, kind: StatusKind | "" = "") {
     setStatus(text);
@@ -424,7 +410,7 @@ export default function Page() {
     return mapped;
   }
 
-  async function tryNonStreamEndpoints(payload: any): Promise<{ endpoint: string; response: ChatResponse }> {
+  async function tryNonStreamEndpoints(payload: any, signal?: AbortSignal): Promise<{ endpoint: string; response: ChatResponse }> {
     const base = trimSlash(backendUrl);
     const candidates: Array<{ endpoint: string; body: any }> = [
       { endpoint: "/api/chat", body: payload },
@@ -444,6 +430,7 @@ export default function Page() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(c.body),
+          signal,
         });
         const text = await r.text();
         let json: any = {};
@@ -470,6 +457,13 @@ export default function Page() {
   }
 
   async function sendMessage() {
+    if (isLoading) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setIsLoading(false);
+      return;
+    }
+
     const payload = buildPayload({
       mode,
       provider,
@@ -500,13 +494,18 @@ export default function Page() {
       tfMonths,
     });
 
-    if (!String(payload?.messages?.[1]?.content || "").trim()) {
+    const q = String(payload?.messages?.[1]?.content || "").trim();
+    if (!q) {
       setUiStatus("请先输入用户问题。", "warn");
       return;
     }
 
+    setLastQuestion(q);
+    setUserPrompt("");
     resetRuntimePanels();
     setIsLoading(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     setUiStatus("请求中...", "warn");
 
     try {
@@ -514,6 +513,7 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
       if (res.ok) {
         await consumeSseResponse(res);
@@ -521,7 +521,7 @@ export default function Page() {
       }
 
       setUiStatus(`流式接口不可用（HTTP ${res.status}），尝试非流式接口...`, "warn");
-      const fallback = await tryNonStreamEndpoints(payload);
+      const fallback = await tryNonStreamEndpoints(payload, controller.signal);
       const json = fallback.response;
       setResponse(json);
       setBlocks(Array.isArray(json?.ui_blocks) ? json.ui_blocks : []);
@@ -540,6 +540,7 @@ export default function Page() {
       );
       setUiStatus(`请求成功（非流式回退：${fallback.endpoint}）。`, "ok");
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       setUiStatus(`请求失败: ${String(err?.message || err)}`, "err");
     } finally {
       setIsLoading(false);
@@ -707,7 +708,7 @@ export default function Page() {
       <main className="chat-shell">
         <section className="chat-header">
           <div>
-            <h1>智慧风电智能体</h1>
+            <h1>中交智慧风电智能体</h1>
             <p className="subtle">面向风电知识问答、RAG 检索与台风分析</p>
           </div>
           <button className="ghost-btn" onClick={() => setShowSettings((v) => !v)}>
@@ -723,6 +724,15 @@ export default function Page() {
             </div>
           ) : null}
 
+          {!!lastQuestion ? (
+            <article className="msg-row assistant-row">
+              <div className="avatar">Q</div>
+              <div className="msg-card markdown-message">
+                <div className="markdown-body plain-markdown">{`Q: ${lastQuestion}`}</div>
+              </div>
+            </article>
+          ) : null}
+
           {!!streamedAnswer && !response ? (
             <article className="msg-row assistant-row">
               <div className="avatar">A</div>
@@ -735,17 +745,18 @@ export default function Page() {
           {displayBlocks.map((b, i) => {
             const isMessage = b.type === "message";
             const isGallery = b.type === "gallery";
-            const isAssistantLike = isMessage || isGallery || b.type === "meta" || b.type === "metrics" || b.type === "json" || b.type === "agentic_grades" || b.type === "agentic_trace_timeline" || b.type === "subquestions" || b.type === "alert";
 
             return (
-              <article className={`msg-row ${isAssistantLike ? "assistant-row" : "system-row"}`} key={`${b.type}-${i}`}>
-                <div className="avatar">{isAssistantLike ? "A" : "S"}</div>
+              <article className="msg-row assistant-row" key={`${b.type}-${i}`}>
+                <div className="avatar">A</div>
                 <div className={`msg-card ${isMessage ? "markdown-message" : "data-card"}`}>
                   {!shouldHideBlockTitle(b.type) ? <div className="block-caption">{b.title || titleMap[b.type] || b.type}</div> : null}
 
                   {b.type === "message" ? (
                     <div className="markdown-body plain-markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{String(b.content || "")}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {String(b.content || "")}
+                      </ReactMarkdown>
                     </div>
                   ) : null}
 
@@ -754,20 +765,13 @@ export default function Page() {
                   {b.type === "agentic_trace_timeline" || b.type === "subquestions" ? <pre className="mono slim">{JSON.stringify(b.items || [], null, 2)}</pre> : null}
                   {b.type === "gallery" ? (
                     <div className="gallery gallery-chat">
-                      {(Array.isArray(b.items) ? b.items : [])
-                        .filter((it: any) => {
-                          if (citedFigureKeys.size === 0) return true;
-                          const key = extractFigureKey(String(it?.title || ""));
-                          if (!key) return false;
-                          return citedFigureKeys.has(key);
-                        })
-                        .map((it: any, idx: number) => {
+                      {(Array.isArray(b.items) ? b.items : []).map((it: any, idx: number) => {
                         const src = trimSlash(backendUrl) + String(it?.asset_url || "");
                         return (
                           <div key={`${i}-g-${idx}`} className="gallery-card">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={src} alt={String(it?.title || "image")} />
-                            <div className="gallery-title">{toZhCaption(String(it?.title || ""))}</div>
+                            <div className="gallery-title">{String(it?.title || "image")}</div>
                           </div>
                         );
                       })}
@@ -875,7 +879,8 @@ export default function Page() {
             <textarea
               value={userPrompt}
               onChange={(e) => setUserPrompt(e.target.value)}
-              placeholder="给智慧风电智能体发送消息"
+              disabled={isLoading}
+              placeholder="输入你的问题..."
               className="composer-input"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -884,8 +889,8 @@ export default function Page() {
                 }
               }}
             />
-            <button className="send-btn" onClick={sendMessage} disabled={isLoading} aria-label="发送">
-              <span className="send-arrow">↑</span>
+            <button className="send-btn" onClick={sendMessage} aria-label={isLoading ? "停止" : "发送"}>
+              <span className="send-arrow">{isLoading ? "■" : "↑"}</span>
             </button>
           </div>
         </section>

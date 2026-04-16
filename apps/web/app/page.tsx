@@ -724,18 +724,112 @@ export default function Page() {
 
   return (
     <div className="chat-page">
-      <main className="chat-shell">
-        <section className="chat-header">
-          <div>
-            <h1>中交智慧风电智能体</h1>
-            <p className="subtle">面向风电知识问答、RAG 检索与台风分析</p>
-          </div>
-          <button className="ghost-btn" onClick={() => setShowSettings((v) => !v)}>
-            {showSettings ? "收起设置" : "打开设置"}
+      <main className={`chat-shell ${showSettings ? "with-sidebar" : "sidebar-collapsed"}`}>
+        <div className="chat-layout">
+          <button
+            className={`sidebar-open-btn ${showSettings ? "hidden" : ""}`}
+            onClick={() => setShowSettings(true)}
+            aria-label="打开左侧栏"
+            title="打开设置"
+          >
+            ☰
           </button>
-        </section>
 
-        <section className="chat-body">
+          <aside className="settings-sidebar" aria-hidden={!showSettings}>
+            <div className="settings-sidebar-inner">
+              <div className="sidebar-top">
+                <button
+                  className="sidebar-toggle-btn"
+                  onClick={() => setShowSettings(false)}
+                  aria-label="收起左侧栏"
+                  title="收起设置"
+                >
+                  ☰
+                </button>
+                <span className="sidebar-top-title">设置</span>
+              </div>
+              <section className="settings-drawer card-lite">
+                <div className="settings-grid">
+                  <div className="settings-block">
+                    <div className="settings-title">基础</div>
+                    <div className="field-grid two">
+                      <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">auto</option><option value="rag">rag</option><option value="wind_agent">wind_agent</option><option value="typhoon_model">typhoon_model</option><option value="llm_direct">llm_direct</option></select></div>
+                      <div><label>provider</label><input value={provider} onChange={(e) => setProvider(e.target.value)} /></div>
+                      <div><label>model</label><input value={model} onChange={(e) => setModel(e.target.value)} /></div>
+                      <div><label>后端地址</label><input value={backendUrl} onChange={(e) => setBackendUrl(e.target.value)} /></div>
+                      <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
+                      <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
+                      <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
+                    </div>
+                    <div>
+                      <label>系统提示词</label>
+                      <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+                    </div>
+                  </div>
+
+                  {showRagPanel ? (
+                    <div className="settings-block">
+                      <div className="settings-title">RAG</div>
+                      <div className="check-grid">
+                        <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
+                        <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
+                        <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
+                      </div>
+                      <div className="field-grid three">
+                        <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
+                        <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
+                        <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
+                        <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
+                        <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
+                        <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {shouldShowTyphoonPanel ? (
+                    <div className="settings-block">
+                      <div className="settings-title">台风参数</div>
+                      <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
+                      <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
+                        <div className="field-grid two">
+                          <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
+                          <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
+                        </div>
+                        <div className="field-grid three">
+                          <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
+                          <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
+                          <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
+                          <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
+                          <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
+                          <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
+                        </div>
+                        <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
+                      </fieldset>
+                    </div>
+                  ) : null}
+
+                  <div className="settings-block">
+                    <div className="settings-title">工具</div>
+                    <div className="inline-actions">
+                      <button className="ghost-btn" onClick={checkHealth}>健康检查</button>
+                      <button className="ghost-btn" onClick={saveResult}>下载结果</button>
+                    </div>
+                    <div className={`status-chip ${statusKind}`}>{status}</div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </aside>
+
+          <section className="chat-main">
+            <section className="chat-header">
+              <div>
+                <h1>中交智慧风电智能体</h1>
+                <p className="subtle">面向风电知识问答、RAG 检索与台风分析</p>
+              </div>
+            </section>
+
+            <section className="chat-body">
           {!hasResultSection ? (
             <div className="empty-state card-lite">
               <div className="empty-title">今天想分析什么？</div>
@@ -827,101 +921,30 @@ export default function Page() {
           ) : null}
 
           <div ref={chatEndRef} />
-        </section>
+            </section>
 
-        {showSettings ? (
-          <section className="settings-drawer card-lite">
-            <div className="settings-grid">
-              <div className="settings-block">
-                <div className="settings-title">基础</div>
-                <div className="field-grid two">
-                  <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">auto</option><option value="rag">rag</option><option value="wind_agent">wind_agent</option><option value="typhoon_model">typhoon_model</option><option value="llm_direct">llm_direct</option></select></div>
-                  <div><label>provider</label><input value={provider} onChange={(e) => setProvider(e.target.value)} /></div>
-                  <div><label>model</label><input value={model} onChange={(e) => setModel(e.target.value)} /></div>
-                  <div><label>后端地址</label><input value={backendUrl} onChange={(e) => setBackendUrl(e.target.value)} /></div>
-                  <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
-                  <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
-                  <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
-                </div>
-                <div>
-                  <label>系统提示词</label>
-                  <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
-                </div>
+            <section className="composer-wrap">
+              <div className="composer-shell">
+                <textarea
+                  value={userPrompt}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  disabled={isLoading}
+                  placeholder="输入你的问题..."
+                  className="composer-input"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
+                />
+                <button className="send-btn" onClick={sendMessage} aria-label={isLoading ? "停止" : "发送"}>
+                  <span className="send-arrow">{isLoading ? "■" : "↑"}</span>
+                </button>
               </div>
-
-              {showRagPanel ? (
-                <div className="settings-block">
-                  <div className="settings-title">RAG</div>
-                  <div className="check-grid">
-                    <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
-                    <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
-                    <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
-                  </div>
-                  <div className="field-grid three">
-                    <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
-                    <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
-                    <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
-                    <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
-                    <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
-                    <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
-                  </div>
-                </div>
-              ) : null}
-
-              {shouldShowTyphoonPanel ? (
-                <div className="settings-block">
-                  <div className="settings-title">台风参数</div>
-                  <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
-                  <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
-                    <div className="field-grid two">
-                      <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
-                      <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
-                    </div>
-                    <div className="field-grid three">
-                      <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
-                      <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
-                      <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
-                      <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
-                      <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
-                      <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
-                    </div>
-                    <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
-                  </fieldset>
-                </div>
-              ) : null}
-
-              <div className="settings-block">
-                <div className="settings-title">工具</div>
-                <div className="inline-actions">
-                  <button className="ghost-btn" onClick={checkHealth}>健康检查</button>
-                  <button className="ghost-btn" onClick={saveResult}>下载结果</button>
-                </div>
-                <div className={`status-chip ${statusKind}`}>{status}</div>
-              </div>
-            </div>
+            </section>
           </section>
-        ) : null}
-
-        <section className="composer-wrap">
-          <div className="composer-shell">
-            <textarea
-              value={userPrompt}
-              onChange={(e) => setUserPrompt(e.target.value)}
-              disabled={isLoading}
-              placeholder="输入你的问题..."
-              className="composer-input"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void sendMessage();
-                }
-              }}
-            />
-            <button className="send-btn" onClick={sendMessage} aria-label={isLoading ? "停止" : "发送"}>
-              <span className="send-arrow">{isLoading ? "■" : "↑"}</span>
-            </button>
-          </div>
-        </section>
+        </div>
       </main>
     </div>
   );

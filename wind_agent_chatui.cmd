@@ -3,11 +3,11 @@ setlocal
 
 set "ROOT_DIR=%~dp0"
 set "WEB_DIR=%ROOT_DIR%apps\web"
-set "UI_PORT=3005"
+if not defined UI_PORT set "UI_PORT=3005"
 
-set "LOCAL_PORT=8787"
-set "REMOTE_HOST=127.0.0.1"
-set "REMOTE_PORT=8787"
+if not defined LOCAL_PORT set "LOCAL_PORT=8787"
+if not defined REMOTE_HOST set "REMOTE_HOST=127.0.0.1"
+if not defined REMOTE_PORT set "REMOTE_PORT=8787"
 
 set "JUMP_USER=lijiyao"
 set "JUMP_HOST=172.30.3.166"
@@ -39,6 +39,13 @@ if not defined NPM_CMD (
   if not defined NO_PAUSE pause
   exit /b 1
 )
+
+echo [INFO] Launch config:
+echo        UI_PORT=%UI_PORT%
+echo        LOCAL_PORT=%LOCAL_PORT%
+echo        REMOTE_HOST=%REMOTE_HOST%
+echo        REMOTE_PORT=%REMOTE_PORT%
+echo [INFO] For colleague: use different UI_PORT/LOCAL_PORT on their own machine.
 
 if /I not "%SKIP_TUNNEL%"=="1" (
   where plink.exe >nul 2>nul

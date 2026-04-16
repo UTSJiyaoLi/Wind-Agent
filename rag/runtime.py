@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
+from typing import Any
 
 from observability.tracer import build_tracer_from_args
 
@@ -41,6 +43,8 @@ class Runtime:
         self.client = MilvusClient(uri=args.uri)
         self.embed_model = None
         self.reranker = None
+        self._embed_lock = threading.Lock()
+        self._reranker_lock = threading.Lock()
         self.tracer = build_tracer_from_args(args)
 
     def get_embed_model(self) -> BGEM3FlagModel:
@@ -60,6 +64,23 @@ class Runtime:
                 batch_size=self.args.reranker_batch_size,
             )
         return self.reranker
+
+    def encode_texts(self, texts: list[str]) -> dict[str, Any]:
+        with self._embed_lock:
+            model = self.get_embed_model()
+            return model.encode(
+                texts,
+                batch_size=1,
+                max_length=512,
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
+
+    def rerank_hits(self, query: str, hits: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
+        with self._reranker_lock:
+            reranker = self.get_reranker()
+            return reranker.rerank(query, hits, top_k)
 
 
 def parse_args() -> argparse.Namespace:

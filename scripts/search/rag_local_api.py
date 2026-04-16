@@ -45,12 +45,13 @@ try:
 except Exception:
     run_typhoon_probability = None  # type: ignore
 
-from rag.service import handle_chat_request
+from rag.service import _build_rag_user_prompt, handle_chat_request
 
 from rag.retrieval import (
     build_citations_and_media,
     build_preview_images,
     call_vllm_chat,
+    call_vllm_chat_stream,
     render_citation_index,
     retrieve_contexts,
     summarize_media_for_prompt,
@@ -174,9 +175,54 @@ def build_app_handler(runtime: Runtime):
                     # allow {input:{...}} while keeping /api/chat contract unchanged.
                     if isinstance(req_body.get("input"), dict):
                         req_body = req_body["input"]
-                    status_code, payload = handle_chat_request(
-                        request_path="/api/chat",
-                        req=req_body,
+                    self._send_sse_headers()
+                    mode = str(req_body.get("mode", "auto") or "auto").strip().lower()
+                    if mode != "rag":
+                        status_code, payload = handle_chat_request(
+                            request_path="/api/chat",
+                            req=req_body,
+                            runtime=runtime,
+                            run_wind_agent_flow=run_wind_agent_flow,
+                            call_vllm_chat=call_vllm_chat,
+                            retrieve_contexts=retrieve_contexts,
+                            build_citations_and_media=build_citations_and_media,
+                            build_preview_images=build_preview_images,
+                            format_contexts_for_prompt=format_contexts_for_prompt,
+                            summarize_media_for_prompt=summarize_media_for_prompt,
+                            render_citation_index=render_citation_index,
+                        )
+                        if status_code >= 400:
+                            self._write_sse("error", {"ok": False, "status_code": status_code, "payload": payload})
+                            self._write_sse("done", {"ok": False, "status_code": status_code, "payload": payload})
+                            self.close_connection = True
+                            return
+                        answer = str(payload.get("answer") or "")
+                        step = 24
+                        if answer:
+                            for i in range(0, len(answer), step):
+                                chunk = answer[i : i + step]
+                                self._write_sse("token", {"text": chunk})
+                        for block in payload.get("ui_blocks") or []:
+                            if isinstance(block, dict):
+                                self._write_sse("block", block)
+                        self._write_sse("done", payload)
+                        self.close_connection = True
+                        return
+
+                    self._write_sse(
+                        "meta",
+                        {
+                            "mode": "rag",
+                            "streaming": True,
+                            "client_time": time.time(),
+                            "session_id": str(req_body.get("session_id") or ""),
+                        },
+                    )
+                    retrieve_req = dict(req_body)
+                    retrieve_req["mode"] = "rag"
+                    status_code, retrieve_payload = handle_chat_request(
+                        request_path="/api/retrieve",
+                        req=retrieve_req,
                         runtime=runtime,
                         run_wind_agent_flow=run_wind_agent_flow,
                         call_vllm_chat=call_vllm_chat,
@@ -187,23 +233,67 @@ def build_app_handler(runtime: Runtime):
                         summarize_media_for_prompt=summarize_media_for_prompt,
                         render_citation_index=render_citation_index,
                     )
-                    self._send_sse_headers()
                     if status_code >= 400:
-                        self._write_sse("error", {"ok": False, "status_code": status_code, "payload": payload})
-                        self._write_sse("done", {"ok": False, "status_code": status_code, "payload": payload})
+                        self._write_sse("error", {"ok": False, "status_code": status_code, "payload": retrieve_payload})
+                        self._write_sse("done", {"ok": False, "status_code": status_code, "payload": retrieve_payload})
                         self.close_connection = True
                         return
 
-                    answer = str(payload.get("answer") or "")
-                    step = 24
-                    if answer:
-                        for i in range(0, len(answer), step):
-                            chunk = answer[i : i + step]
-                            self._write_sse("token", {"text": chunk})
-                    for block in payload.get("ui_blocks") or []:
-                        if isinstance(block, dict):
-                            self._write_sse("block", block)
-                    self._write_sse("done", payload)
+                    for block in retrieve_payload.get("ui_blocks") or []:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "message":
+                            continue
+                        self._write_sse("block", block)
+
+                    model = str(retrieve_req.get("model") or runtime.args.llm_model).strip()
+                    generation_cfg = retrieve_req.get("generation_config") or {}
+                    llm_base_url = str(generation_cfg.get("base_url") or runtime.args.llm_base_url).strip()
+                    api_key = str(generation_cfg.get("api_key") or runtime.args.llm_api_key)
+                    temperature = float(generation_cfg.get("temperature", runtime.args.llm_temperature))
+                    max_tokens = int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens))
+                    messages = retrieve_req.get("messages") or []
+                    user_query = ""
+                    if isinstance(messages, list):
+                        for msg in reversed(messages):
+                            if isinstance(msg, dict) and msg.get("role") == "user":
+                                user_query = str(msg.get("content", "")).strip()
+                                break
+                    prompt_contexts = retrieve_payload.get("prompt_contexts") or []
+                    context_blob = format_contexts_for_prompt(prompt_contexts)
+                    media_blob = summarize_media_for_prompt(prompt_contexts)
+                    rag_messages = [
+                        {"role": "system", "content": runtime.args.system_prompt},
+                        {"role": "user", "content": _build_rag_user_prompt(user_query, context_blob, media_blob)},
+                    ]
+                    answer_parts: list[str] = []
+                    for token in call_vllm_chat_stream(
+                        base_url=llm_base_url,
+                        api_key=api_key,
+                        model=model,
+                        messages=rag_messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout_seconds=runtime.args.llm_timeout_seconds,
+                    ):
+                        answer_parts.append(token)
+                        self._write_sse("token", {"text": token})
+
+                    answer = "".join(answer_parts)
+                    citations = retrieve_payload.get("citations") or []
+                    if citations:
+                        appendix = f"\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"
+                        answer += appendix
+                        self._write_sse("token", {"text": appendix})
+
+                    done_payload = dict(retrieve_payload)
+                    done_payload["answer"] = answer
+                    done_payload["model"] = model
+                    done_payload["mode"] = "rag"
+                    done_payload["elapsed_seconds"] = round(time.time() - started, 4)
+                    existing_blocks = [b for b in (done_payload.get("ui_blocks") or []) if isinstance(b, dict) and b.get("type") != "message"]
+                    done_payload["ui_blocks"] = [{"type": "message", "role": "assistant", "content": answer}, *existing_blocks]
+                    self._write_sse("done", done_payload)
                     self.close_connection = True
                     return
                 if handle_chat_request is None:

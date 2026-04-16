@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from uuid import uuid4
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
@@ -300,6 +302,7 @@ def _build_ui_blocks(
     mode: str,
     answer: str,
     request_id: str,
+    session_id: str = "",
     retrieval_metrics: dict[str, Any] | None = None,
     preview_images: list[dict[str, Any]] | None = None,
     analysis: dict[str, Any] | None = None,
@@ -310,7 +313,10 @@ def _build_ui_blocks(
 ) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     blocks.append({"type": "message", "role": "assistant", "content": answer})
-    blocks.append({"type": "meta", "items": {"mode": mode, "request_id": request_id}})
+    meta_items: dict[str, Any] = {"mode": mode, "request_id": request_id}
+    if session_id:
+        meta_items["session_id"] = session_id
+    blocks.append({"type": "meta", "items": meta_items})
     if error:
         blocks.append({"type": "alert", "level": "error", "content": error})
     if retrieval_metrics:
@@ -647,6 +653,7 @@ def handle_chat_request(
 
         tracer = BaseTracer()
     request_id = tracer.new_trace_id()
+    session_id = str(req.get("session_id") or "").strip() or f"session-{uuid4().hex[:10]}"
     mode = str(req.get("mode", "auto") or "auto").strip().lower()
     requested_mode = mode
     if mode == "typhoon_model":
@@ -668,6 +675,7 @@ def handle_chat_request(
             "request_path": request_path,
             "provider": provider,
             "requested_mode": requested_mode,
+            "session_id": session_id,
             "user_query_summary": tracer.summarize_text(user_content, max_len=100),
         },
     ) as request_span:
@@ -713,10 +721,12 @@ def handle_chat_request(
                 "error": agent_result.get("error"),
                 "success": agent_result.get("success"),
                 "request_id": request_id,
+                "session_id": session_id,
                 "ui_blocks": _build_ui_blocks(
                     mode=mode,
                     answer=agent_result.get("summary") or "Agent finished.",
                     request_id=request_id,
+                    session_id=session_id,
                     preview_images=preview_images,
                     analysis=agent_result.get("analysis"),
                     error=agent_result.get("error"),
@@ -756,7 +766,8 @@ def handle_chat_request(
                 "retrieval_metrics": {},
                 "elapsed_seconds": round(time.time() - started, 4),
                 "request_id": request_id,
-                "ui_blocks": _build_ui_blocks(mode=mode, answer=answer, request_id=request_id),
+                "session_id": session_id,
+                "ui_blocks": _build_ui_blocks(mode=mode, answer=answer, request_id=request_id, session_id=session_id),
             }
 
         if mode == "rag":
@@ -799,51 +810,53 @@ def handle_chat_request(
                     )
 
             if decomposition.get("triggered"):
-                sub_payloads: list[dict[str, Any]] = []
-                for sub_query in decomposition["subquestions"]:
-                    sub_ret = run_single_query(sub_query)
-                    sub_contexts = sub_ret["contexts"]
-                    sub_prompt_contexts = sub_ret["prompt_contexts"]
-                    sub_metrics = sub_ret["retrieval_metrics"]
-                    sub_trace = sub_ret.get("agentic_trace", [])
-                    sub_actions = sub_ret.get("agentic_actions", [])
-                    sub_grades = dict(sub_ret.get("agentic_grades", {}))
-                    sub_citations, sub_media_refs = build_citations_and_media(sub_contexts)
-                    sub_preview_images = build_preview_images(sub_contexts)
-                    context_blob = format_contexts_for_prompt(sub_prompt_contexts)
-                    media_blob = summarize_media_for_prompt(sub_prompt_contexts)
-                    rag_messages = [
-                        {"role": "system", "content": runtime.args.system_prompt},
-                        {"role": "user", "content": _build_rag_user_prompt(sub_query, context_blob, media_blob)},
-                    ]
-                    sub_answer = call_vllm_chat(
-                        base_url=llm_base_url,
-                        api_key=api_key,
-                        model=model,
-                        messages=rag_messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        timeout_seconds=runtime.args.llm_timeout_seconds,
-                    )
-                    answer_grade = _grade_answer_rules(sub_answer, sub_prompt_contexts)
-                    if answer_grade.get("confidence", 0.0) < 0.55:
-                        llm_grade = _grade_answer_with_llm(
-                            call_vllm_chat=call_vllm_chat,
-                            llm_base_url=llm_base_url,
+                indexed_questions = list(enumerate(decomposition["subquestions"], start=1))
+                sub_payload_map: dict[int, dict[str, Any]] = {}
+
+                def _run_subquery(idx: int, sub_query: str) -> tuple[int, dict[str, Any]]:
+                    try:
+                        sub_ret = run_single_query(sub_query)
+                        sub_contexts = sub_ret["contexts"]
+                        sub_prompt_contexts = sub_ret["prompt_contexts"]
+                        sub_metrics = sub_ret["retrieval_metrics"]
+                        sub_trace = sub_ret.get("agentic_trace", [])
+                        sub_actions = sub_ret.get("agentic_actions", [])
+                        sub_grades = dict(sub_ret.get("agentic_grades", {}))
+                        sub_citations, sub_media_refs = build_citations_and_media(sub_contexts)
+                        sub_preview_images = build_preview_images(sub_contexts)
+                        context_blob = format_contexts_for_prompt(sub_prompt_contexts)
+                        media_blob = summarize_media_for_prompt(sub_prompt_contexts)
+                        rag_messages = [
+                            {"role": "system", "content": runtime.args.system_prompt},
+                            {"role": "user", "content": _build_rag_user_prompt(sub_query, context_blob, media_blob)},
+                        ]
+                        sub_answer = call_vllm_chat(
+                            base_url=llm_base_url,
                             api_key=api_key,
                             model=model,
+                            messages=rag_messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
                             timeout_seconds=runtime.args.llm_timeout_seconds,
-                            query=sub_query,
-                            answer=sub_answer,
-                            prompt_contexts=sub_prompt_contexts,
                         )
-                        if llm_grade is not None:
-                            answer_grade = llm_grade
-                    sub_grades["grounding"] = answer_grade.get("grounding")
-                    sub_grades["usefulness"] = answer_grade.get("usefulness")
-                    sub_grades["answer_grading"] = answer_grade
-                    sub_payloads.append(
-                        {
+                        answer_grade = _grade_answer_rules(sub_answer, sub_prompt_contexts)
+                        if answer_grade.get("confidence", 0.0) < 0.55:
+                            llm_grade = _grade_answer_with_llm(
+                                call_vllm_chat=call_vllm_chat,
+                                llm_base_url=llm_base_url,
+                                api_key=api_key,
+                                model=model,
+                                timeout_seconds=runtime.args.llm_timeout_seconds,
+                                query=sub_query,
+                                answer=sub_answer,
+                                prompt_contexts=sub_prompt_contexts,
+                            )
+                            if llm_grade is not None:
+                                answer_grade = llm_grade
+                        sub_grades["grounding"] = answer_grade.get("grounding")
+                        sub_grades["usefulness"] = answer_grade.get("usefulness")
+                        sub_grades["answer_grading"] = answer_grade
+                        return idx, {
                             "query": sub_query,
                             "answer": sub_answer,
                             "contexts": sub_contexts,
@@ -856,7 +869,29 @@ def handle_chat_request(
                             "media_refs": sub_media_refs,
                             "preview_images": sub_preview_images,
                         }
-                    )
+                    except Exception as exc:  # noqa: BLE001
+                        return idx, {
+                            "query": sub_query,
+                            "answer": "",
+                            "error": str(exc),
+                            "contexts": [],
+                            "prompt_contexts": [],
+                            "retrieval_metrics": {},
+                            "agentic_trace": [{"step": "subquestion_error", "error": str(exc)}],
+                            "agentic_actions": [],
+                            "agentic_grades": {"grounding": 0.0, "usefulness": 0.0},
+                            "citations": [],
+                            "media_refs": [],
+                            "preview_images": [],
+                        }
+
+                max_workers = min(2, max(1, len(indexed_questions)))
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    futures = [pool.submit(_run_subquery, idx, sub_query) for idx, sub_query in indexed_questions]
+                    for future in as_completed(futures):
+                        idx, payload = future.result()
+                        sub_payload_map[idx] = payload
+                sub_payloads = [sub_payload_map[idx] for idx, _ in indexed_questions if idx in sub_payload_map]
                 merged_contexts = _merge_unique_contexts([x["contexts"] for x in sub_payloads])
                 citations, media_refs = build_citations_and_media(merged_contexts)
                 preview_images = build_preview_images(merged_contexts)
@@ -917,10 +952,12 @@ def handle_chat_request(
                     "decomposition": decomposition,
                     "elapsed_seconds": round(time.time() - started, 4),
                     "request_id": request_id,
+                    "session_id": session_id,
                     "ui_blocks": _build_ui_blocks(
                         mode=mode,
                         answer=answer,
                         request_id=request_id,
+                        session_id=session_id,
                         retrieval_metrics=retrieval_metrics,
                         preview_images=preview_images,
                         agentic_trace=agentic_trace,
@@ -963,10 +1000,12 @@ def handle_chat_request(
                     "decomposition": decomposition,
                     "elapsed_seconds": round(time.time() - started, 4),
                     "request_id": request_id,
+                    "session_id": session_id,
                     "ui_blocks": _build_ui_blocks(
                         mode=mode,
                         answer="",
                         request_id=request_id,
+                        session_id=session_id,
                         retrieval_metrics=retrieval_metrics,
                         preview_images=preview_images,
                         agentic_trace=agentic_trace,
@@ -1036,10 +1075,12 @@ def handle_chat_request(
                 "decomposition": decomposition,
                 "elapsed_seconds": round(time.time() - started, 4),
                 "request_id": request_id,
+                "session_id": session_id,
                 "ui_blocks": _build_ui_blocks(
                     mode=mode,
                     answer=answer,
                     request_id=request_id,
+                    session_id=session_id,
                     retrieval_metrics=retrieval_metrics,
                     preview_images=preview_images,
                     agentic_trace=agentic_trace,
@@ -1048,4 +1089,4 @@ def handle_chat_request(
                 ),
             }
 
-        return 400, {"ok": False, "error": f"Unsupported mode: {mode}", "request_id": request_id}
+        return 400, {"ok": False, "error": f"Unsupported mode: {mode}", "request_id": request_id, "session_id": session_id}

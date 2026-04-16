@@ -70,6 +70,7 @@ function parseSseChunk(chunk: string): SseEvent | null {
 }
 
 function buildPayload(state: {
+  sessionId: string;
   mode: string;
   provider: string;
   model: string;
@@ -102,6 +103,7 @@ function buildPayload(state: {
   const typhoonModeEnabled = state.mode === "wind_agent" || state.mode === "typhoon_model";
 
   const payload: any = {
+    session_id: state.sessionId || "session-anon",
     mode: state.mode,
     provider: state.provider,
     model: state.model.trim(),
@@ -207,6 +209,7 @@ export default function Page() {
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(768);
   const [topK, setTopK] = useState(4);
+  const [sessionId, setSessionId] = useState("");
 
   const [ragRewrite, setRagRewrite] = useState(true);
   const [ragExpand, setRagExpand] = useState(false);
@@ -253,6 +256,21 @@ export default function Page() {
   const abortRef = useRef<AbortController | null>(null);
 
   const hasResultSection = useMemo(() => !!response || !!streamedAnswer || blocks.length > 0 || !!lastQuestion, [response, streamedAnswer, blocks, lastQuestion]);
+
+  useEffect(() => {
+    const key = "wind_agent_session_id";
+    let value = "";
+    try {
+      value = window.localStorage.getItem(key) || "";
+      if (!value) {
+        value = (window.crypto?.randomUUID?.() || `sid-${Date.now()}-${Math.random().toString(16).slice(2)}`).toLowerCase();
+        window.localStorage.setItem(key, value);
+      }
+    } catch {
+      value = `sid-${Date.now()}-${Math.random().toString(16).slice(2)}`.toLowerCase();
+    }
+    setSessionId(value);
+  }, []);
   const hasMapSection = useMemo(() => !!mapSpec, [mapSpec]);
   const shouldShowTyphoonPanel = mode === "wind_agent" || mode === "typhoon_model";
   const showRagPanel = useMemo(() => mode === "rag" || mode === "auto" || !!response?.retrieval_metrics, [mode, response?.retrieval_metrics]);
@@ -465,6 +483,7 @@ export default function Page() {
     }
 
     const payload = buildPayload({
+      sessionId,
       mode,
       provider,
       model,
@@ -728,7 +747,7 @@ export default function Page() {
             <article className="msg-row assistant-row">
               <div className="avatar">Q</div>
               <div className="msg-card markdown-message">
-                <div className="markdown-body plain-markdown">{`Q: ${lastQuestion}`}</div>
+                <div className="markdown-body plain-markdown">{`${lastQuestion}`}</div>
               </div>
             </article>
           ) : null}

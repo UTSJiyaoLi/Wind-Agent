@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import quote
 
 import numpy as np
@@ -82,6 +83,62 @@ def call_vllm_chat(
     if isinstance(content, list):
         return "\n".join(str(x.get("text", "")) for x in content if isinstance(x, dict) and x.get("type") == "text").strip()
     return str(content).strip()
+
+
+def call_vllm_chat_stream(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+    timeout_seconds: int,
+) -> Iterator[str]:
+    url = base_url.rstrip("/") + "/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    with requests.post(url, headers=headers, json=payload, timeout=timeout_seconds, stream=True) as resp:
+        resp.raise_for_status()
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = str(raw_line).strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data:
+                continue
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except Exception:
+                continue
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = (choices[0].get("delta") or {})
+            content = delta.get("content")
+            if isinstance(content, str):
+                if content:
+                    yield content
+                continue
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = str(part.get("text", ""))
+                        if text:
+                            yield text
 
 
 def _norm_text(text: str) -> str:
@@ -560,14 +617,17 @@ def retrieve_contexts(runtime: Any, query: str, retrieval_cfg: dict[str, Any]) -
 
     for q_item in query_candidates:
         q_text = str(q_item["query"])
-        emb = model.encode(
-            [q_text],
-            batch_size=1,
-            max_length=512,
-            return_dense=True,
-            return_sparse=True,
-            return_colbert_vecs=False,
-        )
+        if hasattr(runtime, "encode_texts"):
+            emb = runtime.encode_texts([q_text])
+        else:
+            emb = model.encode(
+                [q_text],
+                batch_size=1,
+                max_length=512,
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
         dense = np.asarray(emb["dense_vecs"][0], dtype=np.float32).tolist()
         sparse = normalize_sparse_vector(emb["lexical_weights"][0])
         dense_bge_reqs = build_dense_bge_requests(dense, sparse, limit_each=max(coarse_k, merge_k))
@@ -608,7 +668,10 @@ def retrieve_contexts(runtime: Any, query: str, retrieval_cfg: dict[str, Any]) -
     )
     rerank_candidates = dedup_hits[: max(1, args.max_rerank_candidates)]
     if use_reranker and rerank_candidates:
-        final_hits = runtime.get_reranker().rerank(query, rerank_candidates, top_k)
+        if hasattr(runtime, "rerank_hits"):
+            final_hits = runtime.rerank_hits(query, rerank_candidates, top_k)
+        else:
+            final_hits = runtime.get_reranker().rerank(query, rerank_candidates, top_k)
     else:
         final_hits = rerank_candidates[:top_k]
 

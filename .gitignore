@@ -18,3 +18,9 @@ __pycache__/
 *.pyc
 artifacts/
 wind-agent-code.tar
+
+# Next.js frontend artifacts
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/

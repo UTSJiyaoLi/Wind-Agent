@@ -1,0 +1,2 @@
+lat0,lon0,R_km,year_start,year_end,months,windThreshold_kt,N_storm,N_hit,p_storm,lambda_per_year,p_year
+20.9339,112.202,200,1976,2025,[1 2 3 4 5 6 7 8 9 10 11 12],50,1243,82,0.0659694288012872,1.64,0.806019957709108

@@ -5,11 +5,13 @@ from __future__ import annotations
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from graph.builder import run_wind_agent_flow, run_wind_analysis_flow
+from services.typhoon_probability_service import run_typhoon_probability
 from schemas.api import (
     AgentChatRequest,
     AgentChatResponse,
     CreateTaskRequest,
     CreateTaskResponse,
+    TyphoonProbabilityRequest,
     TaskStateResponse,
     TaskStatus,
 )
@@ -48,7 +50,7 @@ def get_task(task_id: str) -> TaskStateResponse:
 @app.post("/agent/chat", response_model=AgentChatResponse)
 def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
     try:
-        result = run_wind_agent_flow(req.request, req.excel_path)
+        result = run_wind_agent_flow(req.request, req.excel_path, req.wind_agent_input)
         return AgentChatResponse(**result)
     except Exception as exc:  # noqa: BLE001
         return AgentChatResponse(
@@ -58,6 +60,12 @@ def agent_chat(req: AgentChatRequest) -> AgentChatResponse:
             error=str(exc),
             trace=[],
         )
+
+
+@app.post("/typhoon/probability")
+def typhoon_probability(req: TyphoonProbabilityRequest) -> dict:
+    payload = req.model_dump(exclude_none=True)
+    return run_typhoon_probability(payload)
 
 
 def _run_task(task_id: str, excel_path: str) -> None:

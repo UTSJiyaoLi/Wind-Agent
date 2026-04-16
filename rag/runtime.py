@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-rewrite-mode", default=os.getenv("RAG_QUERY_REWRITE_MODE", "heuristic"), choices=["heuristic", "llm", "hybrid"])
     parser.add_argument("--query-rewrite-max-variants", type=int, default=int(os.getenv("RAG_QUERY_REWRITE_MAX_VARIANTS", "1")))
     parser.add_argument("--query-rewrite-llm-timeout", type=int, default=int(os.getenv("RAG_QUERY_REWRITE_LLM_TIMEOUT", "20")))
-    parser.add_argument("--enable-domain-expansion", action="store_true", default=_strtobool(os.getenv("RAG_ENABLE_DOMAIN_EXPANSION", "true")))
+    parser.add_argument("--enable-domain-expansion", action="store_true", default=_strtobool(os.getenv("RAG_ENABLE_DOMAIN_EXPANSION", "false")))
     parser.add_argument("--domain-expansion-max-variants", type=int, default=int(os.getenv("RAG_DOMAIN_EXPANSION_MAX_VARIANTS", "3")))
     parser.add_argument("--enable-context-orchestration", action="store_true", default=_strtobool(os.getenv("RAG_ENABLE_CONTEXT_ORCHESTRATION", "true")))
     parser.add_argument("--context-budget-strategy", default=os.getenv("RAG_CONTEXT_BUDGET_STRATEGY", "dynamic"), choices=["dynamic", "fixed"])

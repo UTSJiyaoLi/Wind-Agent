@@ -28,6 +28,7 @@ class AgentFlowState(TypedDict, total=False):
 
     selected_tool: str
     tool_input: Dict[str, Any]
+    tool_input_hint: Dict[str, Any]
     tool_result: Dict[str, Any]
 
     workflow_plan: List[Dict[str, Any]]

@@ -40,6 +40,11 @@ try:
 except Exception:
     run_wind_agent_flow = None  # type: ignore
 
+try:
+    from services.typhoon_probability_service import run_typhoon_probability
+except Exception:
+    run_typhoon_probability = None  # type: ignore
+
 from rag.service import handle_chat_request
 
 from rag.retrieval import (
@@ -82,6 +87,23 @@ def build_app_handler(runtime: Runtime):
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.end_headers()
+
+        def _send_sse_headers(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.end_headers()
+
+        def _write_sse(self, event: str, data: dict[str, Any]) -> None:
+            payload = json.dumps(data, ensure_ascii=False)
+            body = f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+            self.wfile.write(body)
+            self.wfile.flush()
 
         def do_GET(self) -> None:
             if self.path == "/health":
@@ -129,7 +151,7 @@ def build_app_handler(runtime: Runtime):
             self._send_json(404, {"ok": False, "error": "Not Found"})
 
         def do_POST(self) -> None:
-            if self.path not in {"/api/chat", "/api/retrieve"}:
+            if self.path not in {"/api/chat", "/api/chat/stream", "/api/retrieve", "/api/typhoon_probability"}:
                 self._send_json(404, {"ok": False, "error": "Not Found"})
                 return
 
@@ -138,6 +160,52 @@ def build_app_handler(runtime: Runtime):
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
                 req = json.loads(raw)
+                if self.path == "/api/typhoon_probability":
+                    if run_typhoon_probability is None:
+                        raise RuntimeError("typhoon probability service is unavailable")
+                    result = run_typhoon_probability(req if isinstance(req, dict) else {})
+                    self._send_json(200, result)
+                    return
+                if self.path == "/api/chat/stream":
+                    if handle_chat_request is None:
+                        raise RuntimeError("rag.service.handle_chat_request is unavailable")
+                    req_body = req if isinstance(req, dict) else {}
+                    # LangGraph SDK custom transport compatibility:
+                    # allow {input:{...}} while keeping /api/chat contract unchanged.
+                    if isinstance(req_body.get("input"), dict):
+                        req_body = req_body["input"]
+                    status_code, payload = handle_chat_request(
+                        request_path="/api/chat",
+                        req=req_body,
+                        runtime=runtime,
+                        run_wind_agent_flow=run_wind_agent_flow,
+                        call_vllm_chat=call_vllm_chat,
+                        retrieve_contexts=retrieve_contexts,
+                        build_citations_and_media=build_citations_and_media,
+                        build_preview_images=build_preview_images,
+                        format_contexts_for_prompt=format_contexts_for_prompt,
+                        summarize_media_for_prompt=summarize_media_for_prompt,
+                        render_citation_index=render_citation_index,
+                    )
+                    self._send_sse_headers()
+                    if status_code >= 400:
+                        self._write_sse("error", {"ok": False, "status_code": status_code, "payload": payload})
+                        self._write_sse("done", {"ok": False, "status_code": status_code, "payload": payload})
+                        self.close_connection = True
+                        return
+
+                    answer = str(payload.get("answer") or "")
+                    step = 24
+                    if answer:
+                        for i in range(0, len(answer), step):
+                            chunk = answer[i : i + step]
+                            self._write_sse("token", {"text": chunk})
+                    for block in payload.get("ui_blocks") or []:
+                        if isinstance(block, dict):
+                            self._write_sse("block", block)
+                    self._write_sse("done", payload)
+                    self.close_connection = True
+                    return
                 if handle_chat_request is None:
                     raise RuntimeError("rag.service.handle_chat_request is unavailable")
                 status_code, payload = handle_chat_request(

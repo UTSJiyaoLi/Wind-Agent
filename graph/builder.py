@@ -63,6 +63,7 @@ def run_wind_analysis_flow(excel_path: str) -> Dict[str, Any]:
 def run_wind_agent_flow(
     request: str,
     excel_path_hint: Optional[str] = None,
+    tool_input_hint: Optional[Dict[str, Any]] = None,
     llm_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     app = build_wind_agent_graph()
@@ -74,6 +75,8 @@ def run_wind_agent_flow(
     }
     if excel_path_hint:
         state["file_path"] = excel_path_hint
+    if tool_input_hint:
+        state["tool_input_hint"] = dict(tool_input_hint)
     if llm_config:
         state["llm_config"] = dict(llm_config)
 
@@ -83,6 +86,7 @@ def run_wind_agent_flow(
         "request_id": result.get("request_id", request_id),
         "success": not bool(result.get("error")),
         "request": request,
+        "selected_tool": result.get("selected_tool"),
         "resolved_excel_path": result.get("file_path"),
         "resolved_excel_paths": result.get("file_paths", []),
         "resolved_data_folder": result.get("data_folder"),

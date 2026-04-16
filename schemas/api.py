@@ -38,6 +38,30 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Optional explicit excel path. If omitted, agent will try to parse from request text.",
     )
+    wind_agent_input: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional structured tool input, e.g. typhoon probability parameters.",
+    )
+
+
+class TyphoonPointInput(BaseModel):
+    lat: float
+    lon: float
+    radius_km: Optional[float] = None
+
+
+class TyphoonProbabilityRequest(BaseModel):
+    model_scope: str = Field(default="total", description="total or scs")
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    radius_km: Optional[float] = None
+    year_start: int = 1976
+    year_end: int = 2025
+    months: Optional[List[int]] = None
+    wind_threshold_kt: int = 50
+    n_boundary: Optional[int] = None
+    points: Optional[List[TyphoonPointInput]] = None
+    bst_path: Optional[str] = None
 
 
 class AgentTraceStep(BaseModel):
@@ -51,6 +75,7 @@ class AgentChatResponse(BaseModel):
     request_id: Optional[str] = None
     success: bool
     request: str
+    selected_tool: Optional[str] = None
     resolved_excel_path: Optional[str] = None
     resolved_excel_paths: List[str] = Field(default_factory=list)
     resolved_data_folder: Optional[str] = None

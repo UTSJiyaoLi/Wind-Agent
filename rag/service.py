@@ -16,6 +16,8 @@ _WIND_DOMAIN_KEYWORDS = {
 }
 _TOOL_VERBS = {"分析", "计算", "绘图", "画图", "建模", "统计", "predict", "forecast", "analyze", "plot", "fit"}
 _CHATY_TOKENS = {"你好", "hello", "hi", "thanks", "thank you", "你是谁", "讲个笑话", "天气", "翻译"}
+_TYPHOON_KEYWORDS = {"typhoon", "tropical cyclone", "台风", "风圈", "jma", "bst_all"}
+_MAP_KEYWORDS = {"map", "visual", "visualize", "leaflet", "地图", "可视化"}
 
 
 def _last_user_message(messages: list[dict[str, Any]]) -> str:
@@ -340,6 +342,9 @@ def _default_mode_when_router_unavailable(messages: list[dict[str, Any]]) -> str
     text = _last_user_message(messages)
     if not text:
         return "llm_direct"
+    q = str(text).lower()
+    if any(k in q for k in _TYPHOON_KEYWORDS):
+        return "wind_agent"
     if _looks_like_wind_data_task(text):
         return "wind_agent"
     if _is_wind_domain_query(text):
@@ -367,6 +372,28 @@ def _is_wind_domain_query(query: str) -> bool:
     return any(k in q for k in _WIND_DOMAIN_KEYWORDS)
 
 
+def _is_typhoon_query(query: str) -> bool:
+    q = str(query or "").lower()
+    return any(k in q for k in _TYPHOON_KEYWORDS)
+
+
+def _looks_like_typhoon_tool_request(query: str) -> bool:
+    q = str(query or "").lower()
+    if not q:
+        return False
+    has_typhoon_signal = _is_typhoon_query(q) or ("scs" in q)
+    has_map_signal = any(k in q for k in _MAP_KEYWORDS)
+    has_lat = bool(re.search(r"(?:lat|latitude|纬度)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?", q))
+    has_lon = bool(re.search(r"(?:lon|lng|longitude|经度)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?", q))
+    has_radius = bool(re.search(r"(?:\br\b|radius|半径)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?\s*(?:km)?", q))
+    # e.g. "SCS + lat/lon + R=100km + map visualization"
+    if has_typhoon_signal and ((has_lat and has_lon) or has_map_signal):
+        return True
+    if ("scs" in q) and has_lat and has_lon and has_radius:
+        return True
+    return False
+
+
 def _is_general_chat(query: str) -> bool:
     q = str(query or "").lower().strip()
     if not q:
@@ -383,6 +410,8 @@ def _rule_based_auto_mode(query: str) -> tuple[str | None, str]:
     q = str(query or "").strip()
     if not q:
         return "llm_direct", "empty_query"
+    if _looks_like_typhoon_tool_request(q):
+        return "wind_agent", "rule_typhoon_tool_request"
     if _looks_like_wind_data_task(q):
         return "wind_agent", "rule_wind_data_task"
     if _is_general_chat(q) and not _is_wind_domain_query(q):
@@ -411,9 +440,10 @@ def _auto_select_mode_with_llm(
         "请将用户请求分类到一个且仅一个模式：rag、wind_agent、llm_direct。"
         "判断原则："
         "1) 风电/风资源专业知识问答或需要风电文档依据 -> rag；"
-        "2) 明确要求对风数据文件进行计算分析/图表生成 -> wind_agent；"
+        "2) 明确要求调用工具进行计算分析/图表生成（含台风概率、地图可视化） -> wind_agent；"
         "3) 通用问题、闲聊、写作改写、翻译、编程常识等不依赖风电知识库 -> llm_direct。"
         "若问句同时包含寒暄和专业问题，优先专业问题。"
+        "若请求包含“台风概率”或“台风+地图可视化”，优先 wind_agent。"
         "仅返回严格 JSON：{\"mode\":\"...\",\"confidence\":0.xx,\"reason\":\"...\"}。"
     )
     try:
@@ -433,6 +463,10 @@ def _auto_select_mode_with_llm(
         mode = str(parsed.get("mode", "")).strip().lower()
         if mode in {"rag", "wind_agent", "llm_direct"}:
             # 二次守护：模型误分时用领域规则纠偏
+            if _looks_like_typhoon_tool_request(query):
+                if mode != "wind_agent":
+                    return "wind_agent", {"router_stage": "llm_guard", "reason": f"llm_{mode}_but_typhoon_tool_request"}
+                return mode, {"router_stage": "llm", "reason": str(parsed.get("reason", "")).strip(), "confidence": parsed.get("confidence")}
             if mode == "rag" and not _is_wind_domain_query(query):
                 return "llm_direct", {"router_stage": "llm_guard", "reason": "llm_rag_but_non_domain"}
             if mode == "llm_direct" and _is_wind_domain_query(query):
@@ -615,6 +649,8 @@ def handle_chat_request(
     request_id = tracer.new_trace_id()
     mode = str(req.get("mode", "auto") or "auto").strip().lower()
     requested_mode = mode
+    if mode == "typhoon_model":
+        mode = "wind_agent"
     provider = req.get("provider", "vllm")
     messages = req.get("messages") or []
     generation_cfg = req.get("generation_config") or {}
@@ -647,6 +683,7 @@ def handle_chat_request(
                 raise RuntimeError("wind_agent mode unavailable: cannot import run_wind_agent_flow")
             if not user_content:
                 raise ValueError("No user message found for wind_agent query.")
+            agent_input_hint = req.get("wind_agent_input") if isinstance(req.get("wind_agent_input"), dict) else None
             orch_cfg = {
                 "base_url": str(getattr(runtime.args, "orchestrator_base_url", "") or getattr(runtime.args, "llm_base_url", "")),
                 "model": str(getattr(runtime.args, "orchestrator_model", "") or getattr(runtime.args, "llm_model", "")),
@@ -654,14 +691,15 @@ def handle_chat_request(
                 "timeout_seconds": int(getattr(runtime.args, "orchestrator_timeout_seconds", 60)),
             }
             with tracer.span(request_id, "wind_agent", metadata={"query_summary": tracer.summarize_text(user_content)}) as agent_span:
-                agent_result = run_wind_agent_flow(user_content, llm_config=orch_cfg)
+                agent_result = run_wind_agent_flow(user_content, tool_input_hint=agent_input_hint, llm_config=orch_cfg)
                 agent_span.add({"success": bool(agent_result.get("success"))})
             preview_images, tool_charts = _build_tool_preview_images(agent_result)
+            selected_tool = str(agent_result.get("selected_tool") or "wind_agent_tool")
             return 200, {
                 "ok": True,
                 "mode": mode,
                 "provider": provider,
-                "model": "wind_analysis_tool",
+                "model": selected_tool,
                 "answer": agent_result.get("summary") or "Agent finished.",
                 "analysis": agent_result.get("analysis"),
                 "trace": agent_result.get("trace", []),

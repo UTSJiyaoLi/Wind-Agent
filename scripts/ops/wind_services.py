@@ -42,6 +42,11 @@ def _build_remote_start_script() -> str:
     model_embed = os.getenv("WIND_REMOTE_MODEL_EMBED", "/share/home/lijiyao/CCCC/Models/BAAI/bge-m3")
     model_chat = os.getenv("WIND_REMOTE_MODEL_CHAT", "/share/home/lijiyao/CCCC/Models/vlms/Qwen3-VL-8B-Instruct")
     model_orch = os.getenv("WIND_REMOTE_MODEL_ORCH", "/share/home/lijiyao/CCCC/Models/llms/Llama-3.1-8B-Instruct")
+    model_reranker = os.getenv("WIND_REMOTE_MODEL_RERANKER", "/share/home/lijiyao/CCCC/Models/BAAI/bge-reranker-v2-m3")
+    rag_device = os.getenv("WIND_REMOTE_RAG_DEVICE", "cuda")
+    rag_enable_nv = str(os.getenv("WIND_REMOTE_RAG_ENABLE_NV", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    rag_enable_query_rewrite = os.getenv("WIND_REMOTE_RAG_ENABLE_QUERY_REWRITE", "true")
+    rag_enable_domain_expansion = os.getenv("WIND_REMOTE_RAG_ENABLE_DOMAIN_EXPANSION", "false")
     meta_jsonl = os.getenv("WIND_REMOTE_META_JSONL", "/share/home/lijiyao/CCCC/Data/embedding/full_metadata.jsonl")
     meta_idx = os.getenv("WIND_REMOTE_META_IDX", "/share/home/lijiyao/CCCC/Data/embedding/full_metadata.idx.json")
     obs_backend = os.getenv("OBS_BACKEND", "jsonl")
@@ -52,7 +57,9 @@ def _build_remote_start_script() -> str:
     env_prefix = (
         "if [ -f ./.env.server ]; then set -a; . ./.env.server; set +a; fi; "
         f"OBS_BACKEND={shlex.quote(obs_backend)} OBS_ENABLED={shlex.quote(obs_enabled)} "
-        f"OBS_TRACE_DIR={shlex.quote(obs_trace_dir)} OBS_REDACTION_MODE={shlex.quote(obs_redaction_mode)}"
+        f"OBS_TRACE_DIR={shlex.quote(obs_trace_dir)} OBS_REDACTION_MODE={shlex.quote(obs_redaction_mode)} "
+        f"RAG_ENABLE_QUERY_REWRITE={shlex.quote(rag_enable_query_rewrite)} "
+        f"RAG_ENABLE_DOMAIN_EXPANSION={shlex.quote(rag_enable_domain_expansion)}"
     )
 
     sessions = {
@@ -72,11 +79,12 @@ def _build_remote_start_script() -> str:
             f"> {logdir}/wind_agent_ui.log 2>&1"
         ),
         "wind-rag-unified": (
-            f"cd {root}; {env_prefix} apptainer exec --bind {bind} {inforhub_img} "
+            f"cd {root}; {env_prefix} apptainer exec {'--nv ' if rag_enable_nv else ''}--bind {bind} {inforhub_img} "
             "python scripts/search/rag_local_api.py --host 127.0.0.1 --port 8787 "
             "--uri http://127.0.0.1:19530 --collection winddata_bge_m3_bm25 "
             f"--model-path {model_embed} --llm-base-url http://127.0.0.1:8001 --llm-model {model_chat} "
             f"--orchestrator-base-url http://127.0.0.1:8003 --orchestrator-model {model_chat} "
+            f"--device {rag_device} --reranker-model-path {model_reranker} "
             f"--hydrate-full-metadata --full-metadata-jsonl {meta_jsonl} --full-metadata-idx {meta_idx} "
             f"--obs-enabled {obs_enabled} --obs-backend {obs_backend} --obs-trace-dir {obs_trace_dir} --obs-redaction-mode {obs_redaction_mode} "
             f"> {logdir}/wind_rag_unified.log 2> {logdir}/wind_rag_unified.err"
@@ -159,4 +167,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

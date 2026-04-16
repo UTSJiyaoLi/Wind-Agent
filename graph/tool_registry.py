@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from tools.typhoon_map_tool import build_typhoon_map_tool
+from tools.typhoon_probability_tool import build_typhoon_probability_tool
 from tools.wind_analysis_tool import build_wind_analysis_tool
 
 
@@ -18,6 +20,42 @@ class ToolRegistry:
                 "idempotent": True,
                 "input_schema": {"excel_path": "str", "analysis_profile": "str?"},
                 "executor": self._execute_wind_analysis,
+            },
+            "analyze_typhoon_probability": {
+                "name": "analyze_typhoon_probability",
+                "timeout_seconds": 180,
+                "max_retries": 0,
+                "idempotent": True,
+                "input_schema": {
+                    "model_scope": "str(total|scs)?",
+                    "lat": "float?",
+                    "lon": "float?",
+                    "radius_km": "float?",
+                    "year_start": "int?",
+                    "year_end": "int?",
+                    "months": "list[int]?",
+                    "wind_threshold_kt": "int(30|50)?",
+                    "n_boundary": "int?",
+                    "points": "list[object]?",
+                    "bst_path": "str?",
+                },
+                "executor": self._execute_typhoon_probability,
+            },
+            "analyze_typhoon_map": {
+                "name": "analyze_typhoon_map",
+                "timeout_seconds": 90,
+                "max_retries": 0,
+                "idempotent": True,
+                "input_schema": {
+                    "summary_csv_path": "str?",
+                    "typhoon_result": "object?",
+                    "model_scope": "str(total|scs)?",
+                    "lat": "float?",
+                    "lon": "float?",
+                    "radius_km": "float?",
+                    "output_dir": "str?",
+                },
+                "executor": self._execute_typhoon_map,
             }
         }
 
@@ -56,6 +94,23 @@ class ToolRegistry:
             raise RuntimeError("tool returned non-object JSON payload")
         return parsed
 
+    @staticmethod
+    def _execute_typhoon_probability(payload: dict[str, Any]) -> dict[str, Any]:
+        tool = build_typhoon_probability_tool()
+        raw = tool.invoke(payload)
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("tool returned non-object JSON payload")
+        return parsed
+
+    @staticmethod
+    def _execute_typhoon_map(payload: dict[str, Any]) -> dict[str, Any]:
+        tool = build_typhoon_map_tool()
+        raw = tool.invoke(payload)
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("tool returned non-object JSON payload")
+        return parsed
+
 
 TOOL_REGISTRY = ToolRegistry()
-

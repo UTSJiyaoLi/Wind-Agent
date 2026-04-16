@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Typhoon Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    html,body,#map { height:100%; margin:0; }
+    #meta { position:absolute; top:8px; left:8px; z-index:9999; background:#fff; border:1px solid #ccc; border-radius:8px; padding:8px; font:12px/1.4 sans-serif; max-width:360px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="meta"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const spec = {"model_scope": "scs", "center": {"lat": 20.9339, "lon": 112.202}, "radius_km": 100.0, "fit_bounds": [[0.0, 105.0], [25.0, 121.0]], "tile_layers": {"total": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", "scs": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"}, "scs_polygon": [[0.0, 105.0], [0.0, 121.0], [25.0, 121.0], [25.0, 105.0], [0.0, 105.0]], "metrics": {"N_all": 1243, "N_enterSCS": 529, "N_hit": 57, "p_cond_impact_given_SCS": 0.10775047258979206, "p_abs_impact_and_SCS": 0.04585679806918745, "lambda_per_year": 1.14, "p_year": 0.680180978183696}};
+    const scope = spec.model_scope || "total";
+    const tileUrl = scope === "scs" ? spec.tile_layers.scs : spec.tile_layers.total;
+    const map = L.map('map');
+    L.tileLayer(tileUrl, {maxZoom: 12, attribution: '&copy; map contributors'}).addTo(map);
+    map.fitBounds(spec.fit_bounds);
+
+    if (scope === 'scs' && Array.isArray(spec.scs_polygon)) {
+      L.polygon(spec.scs_polygon, {color:'#f59e0b', weight:2, fillOpacity:0.08}).addTo(map).bindPopup('SCS model range');
+    }
+
+    const center = spec.center || {lat:0, lon:0};
+    L.marker([center.lat, center.lon]).addTo(map).bindPopup('Target point');
+
+    const radiusMeters = Number(spec.radius_km || 0) * 1000;
+    if (radiusMeters > 0) {
+      L.circle([center.lat, center.lon], {radius: radiusMeters, color:'#16a34a', weight:2, fillOpacity:0.08}).addTo(map).bindPopup('Impact radius');
+    }
+
+    const meta = document.getElementById('meta');
+    meta.textContent = `scope=${scope} | center=(${center.lat}, ${center.lon}) | R=${spec.radius_km} km`;
+  </script>
+</body>
+</html>

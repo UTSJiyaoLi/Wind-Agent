@@ -34,3 +34,8 @@ def test_default_plan_for_tool_intent() -> None:
     assert len(plan) == 1
     assert plan[0]["type"] == "tool"
     assert plan[0]["tool"] == "analyze_wind_resource"
+
+
+def test_default_plan_accepts_custom_tool() -> None:
+    plan = build_default_plan("workflow", default_tool="analyze_typhoon_probability")
+    assert plan[1]["tool"] == "analyze_typhoon_probability"

@@ -1,0 +1,2 @@
+lat0,lon0,R_km,year_start,year_end,months,windThreshold_kt,N_all,N_enterSCS,N_hit,p_cond_impact_given_SCS,p_abs_impact_and_SCS,lambda_per_year,p_year
+20.9339,112.202,100,1976,2025,[1 2 3 4 5 6 7 8 9 10 11 12],50,1243,529,57,0.107750472589792,0.0458567980691875,1.14,0.680180978183696

@@ -1,0 +1,510 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wind Agent v4.0 - Typhoon Map</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root {
+      --bg:#f4f8f4; --card:#ffffff; --line:#cedccc; --text:#1f2f1f; --muted:#597059;
+      --primary:#2f7d32; --primary2:#1f5a22; --err:#b42318;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(180deg,#eef7ee,#f7fbf7); color:var(--text); font:14px/1.45 "Segoe UI", Arial, sans-serif; }
+    .wrap { max-width:1120px; margin:20px auto; padding:0 14px 24px; }
+    h1 { margin:0 0 8px; }
+    .sub { color:var(--muted); margin:0 0 12px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+    .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
+    @media (max-width:900px) { .row, .row3 { grid-template-columns:1fr; } }
+    label { display:block; margin-bottom:4px; font-weight:600; color:#315031; }
+    input, select, textarea, button { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+    textarea { min-height:110px; resize:vertical; }
+    button { cursor:pointer; font-weight:600; }
+    .primary { background:var(--primary); color:#fff; border-color:var(--primary); }
+    .primary:hover { background:var(--primary2); border-color:var(--primary2); }
+    .btns { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:8px; margin-top:8px; }
+    .status { white-space:pre-wrap; border:1px solid var(--line); border-radius:8px; padding:8px; background:#f8fcf8; }
+    .mono { white-space:pre-wrap; font:12px/1.4 Consolas, monospace; background:#0f1c16; color:#d9f0dd; border-radius:8px; padding:10px; max-height:300px; overflow:auto; }
+    .blocks { display:grid; gap:10px; }
+    .block { border:1px solid #d6e4d4; border-radius:10px; padding:10px; background:#fbfffb; }
+    .block h3 { margin:0 0 8px; font-size:14px; }
+    .kv { display:grid; grid-template-columns:180px 1fr; gap:6px; font-size:12px; }
+    .gallery { display:grid; gap:8px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+    .gallery img { width:100%; height:170px; object-fit:contain; border:1px solid #dce9da; border-radius:8px; background:#fff; }
+    .alert { border-color:#f4c9c9; background:#fff5f5; color:var(--err); }
+    .map-wrap { display:grid; gap:10px; grid-template-columns:1fr 340px; }
+    @media (max-width:900px) { .map-wrap { grid-template-columns:1fr; } }
+    #typhoonMap { width:100%; height:460px; border:1px solid var(--line); border-radius:10px; }
+    .hint { font-size:12px; color:#4c624c; }
+    .small-btns { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+    .is-hidden { display:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Wind Agent v4.0</h1>
+    <!-- <p class="sub">Dynamic UI rendering from backend <code>ui_blocks</code>, covering full agent modes.</p> -->
+
+    <section class="card">
+      <div class="row3">
+        <div>
+          <label for="backendUrl">Backend URL</label>
+          <input id="backendUrl" value="http://127.0.0.1:8787" />
+        </div>
+        <div>
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="auto">auto</option>
+            <option value="rag">rag</option>
+            <option value="wind_agent">wind_agent</option>
+            <option value="llm_direct">llm_direct</option>
+          </select>
+        </div>
+        <div>
+          <label for="model">Model (optional)</label>
+          <input id="model" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="systemPrompt">System Prompt</label>
+          <textarea id="systemPrompt">You are a rigorous assistant. Use evidence when available.</textarea>
+        </div>
+        <div>
+          <label for="userPrompt">User Prompt</label>
+          <textarea id="userPrompt" placeholder="For wind_agent, include a server path to .xlsx/.xls"></textarea>
+        </div>
+      </div>
+      <div class="row3">
+        <div>
+          <label for="topK">top_k</label>
+          <input id="topK" type="number" value="4" />
+        </div>
+        <div>
+          <label for="temperature">temperature</label>
+          <input id="temperature" type="number" step="0.1" value="0.2" />
+        </div>
+        <div>
+          <label for="maxTokens">max_tokens</label>
+          <input id="maxTokens" type="number" value="768" />
+        </div>
+      </div>
+      <div class="btns">
+        <button id="btnSend" class="primary">Send</button>
+        <button id="btnHealth">Health</button>
+        <button id="btnSaveResult">Save Result</button>
+        <button id="btnLoadDemoWind">Fill Demo Wind</button>
+      </div>
+      <div id="status" class="status" style="margin-top:8px;">Ready.</div>
+    </section>
+
+    <section id="blocksSection" class="card is-hidden">
+      <h2>Generative Blocks</h2>
+      <div id="blocks" class="blocks"></div>
+    </section>
+
+    <section id="rawSection" class="card is-hidden">
+      <h2>Raw Response</h2>
+      <pre id="raw" class="mono">{}</pre>
+    </section>
+
+    <section id="runtimeSection" class="card is-hidden">
+      <h2>Runtime</h2>
+      <pre id="runtime" class="mono">{"client_elapsed_ms":"--","server_elapsed_seconds":"--","finished_at":"--"}</pre>
+    </section>
+
+    <section id="mapSection" class="card is-hidden">
+      <h2>Typhoon CSV Map Visualization</h2>
+      <div class="map-wrap">
+        <div id="typhoonMap"></div>
+        <div>
+          <div class="row">
+            <div>
+              <label for="csvFile">CSV File</label>
+              <input id="csvFile" type="file" accept=".csv,text/csv" />
+            </div>
+            <div>
+              <label for="modelScope">Model Scope</label>
+              <select id="modelScope">
+                <option value="auto">auto (from CSV)</option>
+                <option value="total">total</option>
+                <option value="scs">scs</option>
+              </select>
+            </div>
+          </div>
+          <div class="row3">
+            <div>
+              <label for="mapLat">lat0</label>
+              <input id="mapLat" type="number" step="0.0001" value="20.9339" />
+            </div>
+            <div>
+              <label for="mapLon">lon0</label>
+              <input id="mapLon" type="number" step="0.0001" value="112.202" />
+            </div>
+            <div>
+              <label for="mapRadius">R_km</label>
+              <input id="mapRadius" type="number" step="1" value="200" />
+            </div>
+          </div>
+          <div class="small-btns">
+            <button id="btnRenderCsv" class="primary">Render CSV</button>
+            <button id="btnClearMap">Clear</button>
+          </div>
+          <p class="hint" style="margin-top:8px;">Map tiles are fetched online (OpenStreetMap/Esri). CSV supports summary.csv from total/scs model outputs.</p>
+          <pre id="mapInfo" class="mono" style="margin-top:8px;max-height:220px;">No CSV loaded.</pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    let lastResp = null;
+    let lastClientElapsedMs = null;
+    let typhoonMap = null;
+    let mapLayers = [];
+
+    function setStatus(msg) { $("status").textContent = msg; }
+    function trimSlash(v) { return (v || "").trim().replace(/\/+$/, ""); }
+    function showSection(id) { $(id).classList.remove("is-hidden"); }
+    function hideSection(id) { $(id).classList.add("is-hidden"); }
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      const raw = await res.text();
+      let json = null;
+      try { json = JSON.parse(raw); } catch (_) {}
+      return { ok: res.ok, status: res.status, raw, json };
+    }
+
+    function buildPayload() {
+      const model = $("model").value.trim();
+      const payload = {
+        mode: $("mode").value,
+        provider: "vllm",
+        messages: [
+          { role: "system", content: $("systemPrompt").value.trim() },
+          { role: "user", content: $("userPrompt").value.trim() }
+        ],
+        generation_config: {
+          temperature: Number($("temperature").value || 0.2),
+          max_tokens: Number($("maxTokens").value || 768)
+        },
+        retrieval_config: {
+          top_k: Number($("topK").value || 4)
+        },
+        agentic: {
+          enabled: true,
+          max_retries: 2,
+          min_top_score: 0.58,
+          min_coverage: 0.55,
+          retry_topk_step: 2,
+          max_topk: 10,
+          decompose_enabled: true,
+          max_subquestions: 3
+        }
+      };
+      if (model) payload.model = model;
+      return payload;
+    }
+
+    function renderKv(obj) {
+      const div = document.createElement("div");
+      div.className = "kv";
+      Object.keys(obj || {}).forEach((k) => {
+        const kEl = document.createElement("div");
+        const vEl = document.createElement("div");
+        kEl.textContent = k;
+        vEl.textContent = typeof obj[k] === "string" ? obj[k] : JSON.stringify(obj[k]);
+        div.appendChild(kEl);
+        div.appendChild(vEl);
+      });
+      return div;
+    }
+
+    function renderBlocks(uiBlocks, fallbackResp) {
+      const root = $("blocks");
+      root.innerHTML = "";
+      const blocks = Array.isArray(uiBlocks) && uiBlocks.length ? uiBlocks : [
+        { type: "message", role: "assistant", content: String(fallbackResp?.answer || "(empty)") }
+      ];
+      const backendBase = trimSlash($("backendUrl").value);
+      for (const b of blocks) {
+        const card = document.createElement("div");
+        card.className = "block";
+        if (b.type === "alert") card.classList.add("alert");
+        const title = document.createElement("h3");
+        title.textContent = b.title || b.type;
+        card.appendChild(title);
+
+        if (b.type === "message") {
+          const p = document.createElement("pre");
+          p.className = "mono";
+          p.textContent = String(b.content || "");
+          card.appendChild(p);
+        } else if (b.type === "meta" || b.type === "metrics") {
+          card.appendChild(renderKv(b.items || {}));
+        } else if (b.type === "agentic_grades") {
+          card.appendChild(renderKv(b.data || {}));
+        } else if (b.type === "agentic_trace_timeline" || b.type === "subquestions") {
+          const p = document.createElement("pre");
+          p.className = "mono";
+          p.textContent = JSON.stringify(b.items || [], null, 2);
+          card.appendChild(p);
+        } else if (b.type === "json") {
+          const p = document.createElement("pre");
+          p.className = "mono";
+          p.textContent = JSON.stringify(b.data || {}, null, 2);
+          card.appendChild(p);
+        } else if (b.type === "gallery") {
+          const g = document.createElement("div");
+          g.className = "gallery";
+          for (const it of (b.items || [])) {
+            const wrap = document.createElement("div");
+            const meta = document.createElement("div");
+            meta.style.fontSize = "12px";
+            meta.style.color = "#486248";
+            meta.textContent = `${it.index || ""} | ${it.title || ""}`;
+            const img = document.createElement("img");
+            img.src = backendBase + String(it.asset_url || "");
+            img.alt = String(it.title || "image");
+            const a = document.createElement("a");
+            a.href = img.src;
+            a.textContent = "Download";
+            a.download = "";
+            a.style.display = "inline-block";
+            a.style.marginTop = "6px";
+            wrap.appendChild(meta); wrap.appendChild(img); wrap.appendChild(a);
+            g.appendChild(wrap);
+          }
+          card.appendChild(g);
+        } else if (b.type === "actions") {
+          const box = document.createElement("div");
+          box.style.display = "grid";
+          box.style.gridTemplateColumns = "repeat(auto-fit,minmax(160px,1fr))";
+          box.style.gap = "8px";
+          for (const action of (b.items || [])) {
+            const btn = document.createElement("button");
+            btn.textContent = action.label || action.id || "action";
+            btn.onclick = () => {
+              if (action.id === "save_result") saveResult();
+              if (action.id === "copy_request_id") {
+                const rid = String(lastResp?.request_id || "");
+                if (!rid) return;
+                navigator.clipboard.writeText(rid);
+                setStatus("request_id copied: " + rid);
+              }
+            };
+            box.appendChild(btn);
+          }
+          card.appendChild(box);
+        } else {
+          const p = document.createElement("pre");
+          p.className = "mono";
+          p.textContent = JSON.stringify(b, null, 2);
+          card.appendChild(p);
+        }
+        root.appendChild(card);
+      }
+    }
+
+    function saveResult() {
+      if (!lastResp) { setStatus("No result to save"); return; }
+      const blob = new Blob([JSON.stringify(lastResp, null, 2)], { type: "application/json;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "generative_ui_result_" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      setStatus("Result JSON downloaded");
+    }
+
+    function ensureMap() {
+      if (typhoonMap) return;
+      showSection("mapSection");
+      typhoonMap = L.map("typhoonMap");
+      const defaultLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 12,
+        attribution: "&copy; OpenStreetMap contributors"
+      });
+      defaultLayer.addTo(typhoonMap);
+      typhoonMap.setView([20.9339, 112.202], 4);
+      mapLayers.push(defaultLayer);
+    }
+
+    function clearMap() {
+      ensureMap();
+      for (const layer of mapLayers) {
+        if (layer && typhoonMap.hasLayer(layer)) typhoonMap.removeLayer(layer);
+      }
+      mapLayers = [];
+      const base = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 12,
+        attribution: "&copy; OpenStreetMap contributors"
+      });
+      base.addTo(typhoonMap);
+      mapLayers.push(base);
+      $("mapInfo").textContent = "Map cleared.";
+    }
+
+    function inferScopeFromCsv(headers, selected) {
+      if (selected !== "auto") return selected;
+      return headers.includes("N_enterSCS") ? "scs" : "total";
+    }
+
+    function parseCsvText(text) {
+      const lines = String(text || "").trim().split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) throw new Error("CSV needs header + at least one row");
+      const headers = lines[0].split(",").map((x) => x.trim());
+      const values = lines[1].split(",").map((x) => x.trim());
+      const row = {};
+      headers.forEach((k, i) => { row[k] = values[i] || ""; });
+      return { headers, row };
+    }
+
+    function renderScopeMap(scope, lat, lon, radiusKm, metrics) {
+      ensureMap();
+      clearMap();
+      const tileUrl = scope === "scs"
+        ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+      const tile = L.tileLayer(tileUrl, { maxZoom: 12, attribution: "&copy; map contributors" }).addTo(typhoonMap);
+      mapLayers.push(tile);
+
+      const marker = L.marker([lat, lon]).addTo(typhoonMap).bindPopup("Target point");
+      mapLayers.push(marker);
+      if (radiusKm > 0) {
+        const circle = L.circle([lat, lon], {
+          radius: radiusKm * 1000,
+          color: "#16a34a",
+          weight: 2,
+          fillOpacity: 0.08
+        }).addTo(typhoonMap).bindPopup(`R=${radiusKm} km`);
+        mapLayers.push(circle);
+      }
+
+      if (scope === "scs") {
+        const poly = L.polygon([[0,105],[0,121],[25,121],[25,105]], {
+          color: "#f59e0b",
+          weight: 2,
+          fillOpacity: 0.08
+        }).addTo(typhoonMap).bindPopup("SCS model range");
+        mapLayers.push(poly);
+        typhoonMap.fitBounds([[0,105],[25,121]]);
+      } else {
+        typhoonMap.fitBounds([[0,100],[50,180]]);
+      }
+      $("mapInfo").textContent = JSON.stringify({ scope, lat, lon, radius_km: radiusKm, metrics }, null, 2);
+    }
+
+    async function renderCsvMap() {
+      showSection("mapSection");
+      const file = $("csvFile").files?.[0];
+      if (!file) {
+        setStatus("Please choose a CSV file first.");
+        return;
+      }
+      const text = await file.text();
+      const { headers, row } = parseCsvText(text);
+      const scope = inferScopeFromCsv(headers, $("modelScope").value);
+      const lat = Number(row.lat0 || row.lat || $("mapLat").value || 0);
+      const lon = Number(row.lon0 || row.lon || $("mapLon").value || 0);
+      const radiusKm = Number(row.R_km || row.radius_km || $("mapRadius").value || 0);
+      $("mapLat").value = String(lat);
+      $("mapLon").value = String(lon);
+      $("mapRadius").value = String(radiusKm);
+      renderScopeMap(scope, lat, lon, radiusKm, row);
+      setStatus("CSV map rendered.");
+    }
+
+    async function send() {
+      const backend = trimSlash($("backendUrl").value);
+      const payload = buildPayload();
+      if (!payload.messages[1].content) { setStatus("User prompt is required"); return; }
+      setStatus("Requesting...");
+      const startedAt = performance.now();
+      const out = await fetchJson(backend + "/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!out.ok) {
+        showSection("rawSection");
+        $("raw").textContent = out.raw || "";
+        setStatus("Request failed HTTP " + out.status);
+        return;
+      }
+      showSection("rawSection");
+      showSection("runtimeSection");
+      showSection("blocksSection");
+      lastResp = out.json || {};
+      lastClientElapsedMs = Math.round(performance.now() - startedAt);
+      $("raw").textContent = JSON.stringify(lastResp, null, 2);
+      $("runtime").textContent = JSON.stringify(
+        {
+          client_elapsed_ms: lastClientElapsedMs,
+          server_elapsed_seconds: lastResp?.elapsed_seconds ?? "--",
+          finished_at: new Date().toISOString(),
+        },
+        null,
+        2
+      );
+      renderBlocks(lastResp.ui_blocks, lastResp);
+      const analysis = lastResp?.analysis || {};
+      const mapSpec = analysis?.map_spec
+        || analysis?.result?.map_spec
+        || (Array.isArray(analysis?.batch_results)
+          ? (analysis.batch_results.find((x) => x?.tool === "analyze_typhoon_map") || {})?.result?.map_spec
+          : null);
+      if (mapSpec && mapSpec.center) {
+        showSection("mapSection");
+        renderScopeMap(
+          String(mapSpec.model_scope || "total"),
+          Number(mapSpec.center.lat || 0),
+          Number(mapSpec.center.lon || 0),
+          Number(mapSpec.radius_km || 0),
+          mapSpec.metrics || {}
+        );
+      }
+      setStatus("OK mode=" + String(lastResp.mode || payload.mode));
+    }
+
+    async function health() {
+      const backend = trimSlash($("backendUrl").value);
+      const out = await fetchJson(backend + "/health", { method: "GET" });
+      if (!out.ok) { setStatus("Health failed HTTP " + out.status); return; }
+      showSection("rawSection");
+      $("raw").textContent = JSON.stringify(out.json || {}, null, 2);
+      setStatus("Health OK");
+    }
+
+    function fillDemoWind() {
+      $("mode").value = "wind_agent";
+      $("userPrompt").value = "请分析这个文件: /share/home/lijiyao/CCCC/Wind-Agent/wind_data/wind speed(1).xlsx";
+      setStatus("Demo prompt filled");
+    }
+
+    $("btnSend").addEventListener("click", send);
+    $("btnHealth").addEventListener("click", health);
+    $("btnSaveResult").addEventListener("click", saveResult);
+    $("btnLoadDemoWind").addEventListener("click", fillDemoWind);
+    $("btnRenderCsv").addEventListener("click", renderCsvMap);
+    $("btnClearMap").addEventListener("click", clearMap);
+  </script>
+</body>
+</html>
+

@@ -164,6 +164,137 @@ def _resolve_excel_candidates(query: str, explicit_hint: str | None) -> tuple[li
     return files, matched_folder, warnings
 
 
+def _looks_like_typhoon_query(query: str) -> bool:
+    q = str(query or "").lower()
+    keywords = ("typhoon", "台风", "tropical cyclone", "风圈", "bst_all", "jma", "scs")
+    return any(k in q for k in keywords)
+
+
+def _looks_like_map_query(query: str) -> bool:
+    q = str(query or "").lower()
+    keywords = ("map", "地图", "可视化", "visual", "geo", "leaflet")
+    return any(k in q for k in keywords)
+
+
+def _looks_like_typhoon_param_query(query: str) -> bool:
+    q = str(query or "")
+    has_lat = bool(re.search(r"(?:lat|latitude|纬度)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?", q, flags=re.IGNORECASE))
+    has_lon = bool(re.search(r"(?:lon|lng|longitude|经度)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?", q, flags=re.IGNORECASE))
+    has_radius = bool(
+        re.search(r"(?:\br\b|radius|半径)\s*[:=]?\s*[-+]?\d+(?:\.\d+)?\s*(?:km)?", q, flags=re.IGNORECASE)
+        or re.search(r"[-+]?\d+(?:\.\d+)?\s*km", q, flags=re.IGNORECASE)
+    )
+    return has_lat and has_lon and has_radius
+
+
+def _extract_first_float(text: str, patterns: list[str]) -> float | None:
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return float(match.group(1))
+        except Exception:
+            continue
+    return None
+
+
+def _extract_months(text: str) -> list[int] | None:
+    match = re.search(r"(?:months?|月份)\s*[:=]?\s*([0-9,\s-]+)", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    raw = match.group(1).replace(" ", "")
+    months: set[int] = set()
+    for token in raw.split(","):
+        if not token:
+            continue
+        if "-" in token:
+            parts = token.split("-", 1)
+            try:
+                start = int(parts[0])
+                end = int(parts[1])
+            except Exception:
+                continue
+            for month in range(start, end + 1):
+                if 1 <= month <= 12:
+                    months.add(month)
+            continue
+        try:
+            month = int(token)
+        except Exception:
+            continue
+        if 1 <= month <= 12:
+            months.add(month)
+    return sorted(months) if months else None
+
+
+def _build_typhoon_tool_input(query: str, hint: dict[str, Any] | None) -> dict[str, Any]:
+    payload: dict[str, Any] = dict(hint or {})
+    if "model_scope" not in payload:
+        payload["model_scope"] = "scs" if re.search(r"\bscs\b|南海", query, flags=re.IGNORECASE) else "total"
+
+    if "lat" not in payload:
+        payload["lat"] = _extract_first_float(
+            query,
+            [
+                r"(?:lat|latitude|纬度)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)",
+                r"([-+]?\d+(?:\.\d+)?)\s*(?:[,\s]+)\s*[-+]?\d+(?:\.\d+)?",
+            ],
+        )
+    if "lon" not in payload:
+        payload["lon"] = _extract_first_float(
+            query,
+            [
+                r"(?:lon|lng|longitude|经度)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)",
+                r"[-+]?\d+(?:\.\d+)?\s*(?:[,\s]+)\s*([-+]?\d+(?:\.\d+)?)",
+            ],
+        )
+
+    if "radius_km" not in payload:
+        payload["radius_km"] = _extract_first_float(
+            query,
+            [r"(?:R|radius|半径)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)", r"([-+]?\d+(?:\.\d+)?)\s*km"],
+        )
+    if "wind_threshold_kt" not in payload:
+        kt = _extract_first_float(query, [r"(30|50)\s*kt", r"(30|50)\s*节"])
+        if kt is not None:
+            payload["wind_threshold_kt"] = int(kt)
+
+    months = _extract_months(query)
+    if months and "months" not in payload:
+        payload["months"] = months
+
+    year_start = _extract_first_float(query, [r"(19\d{2}|20\d{2})\s*[-~至到]\s*(19\d{2}|20\d{2})"])
+    year_end_match = re.search(r"(19\d{2}|20\d{2})\s*[-~至到]\s*(19\d{2}|20\d{2})", query)
+    if year_start is not None and year_end_match and "year_start" not in payload and "year_end" not in payload:
+        payload["year_start"] = int(year_start)
+        payload["year_end"] = int(float(year_end_match.group(2)))
+
+    if payload.get("lat") is None or payload.get("lon") is None:
+        payload.pop("lat", None)
+        payload.pop("lon", None)
+    return payload
+
+
+def _infer_preferred_tool(state: AgentFlowState) -> str:
+    hint = state.get("tool_input_hint")
+    if isinstance(hint, dict) and any(k in hint for k in ("model_scope", "lat", "lon", "points")):
+        return "analyze_typhoon_probability"
+    if _looks_like_typhoon_query(str(state.get("user_query", ""))):
+        return "analyze_typhoon_probability"
+    return "analyze_wind_resource"
+
+
+def _build_visual_workflow_plan(default_tool: str) -> list[dict[str, Any]]:
+    if default_tool != "analyze_typhoon_probability":
+        return build_default_plan("workflow", default_tool=default_tool)
+    return [
+        {"step": 1, "type": "tool", "name": "analyze_typhoon_probability", "tool": "analyze_typhoon_probability"},
+        {"step": 2, "type": "tool", "name": "analyze_typhoon_map", "tool": "analyze_typhoon_map"},
+        {"step": 3, "type": "llm", "name": "workflow_summary", "goal": "summarize map and risk findings"},
+    ]
+
+
 def _default_llm_config() -> dict[str, Any]:
     return {
         "base_url": os.getenv("ORCH_LLM_BASE_URL", os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001")),
@@ -258,6 +389,7 @@ def input_preprocess(state: AgentFlowState) -> AgentFlowState:
 
     file_paths, data_folder, matched_warnings = _resolve_excel_candidates(query, hint)
     file_path = file_paths[0] if file_paths else None
+    tool_input_hint = state.get("tool_input_hint")
 
     next_state: AgentFlowState = {
         "request_id": str(state.get("request_id") or ""),
@@ -270,6 +402,8 @@ def input_preprocess(state: AgentFlowState) -> AgentFlowState:
         "workflow_results": list(state.get("workflow_results", [])),
         "trace": list(state.get("trace", [])),
     }
+    if isinstance(tool_input_hint, dict):
+        next_state["tool_input_hint"] = dict(tool_input_hint)
     next_state["warnings"].extend(matched_warnings)
     if state.get("llm_config"):
         next_state["llm_config"] = dict(state.get("llm_config") or {})
@@ -294,17 +428,38 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
     next_state: AgentFlowState = dict(state)
     query = state.get("user_query", "")
     file_paths = list(state.get("file_paths", []))
+    query_text = str(query or "")
 
-    fallback_intent = "tool" if file_paths else "rag"
-    fallback_confidence = 0.6 if file_paths else 0.5
+    should_tool_fallback = bool(file_paths) or _infer_preferred_tool(state) == "analyze_typhoon_probability"
+    typhoon_with_map = _looks_like_typhoon_query(query_text) and (
+        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
+    )
+    if typhoon_with_map:
+        fallback_intent = "workflow"
+    else:
+        fallback_intent = "tool" if should_tool_fallback else "rag"
+    fallback_confidence = 0.6 if should_tool_fallback else 0.5
 
     prompt = (
-        "You are an intent router for a wind-agent system. "
+        "You are an intent router for a wind-agent system with tools: "
+        "analyze_wind_resource, analyze_typhoon_probability, analyze_typhoon_map. "
         "Classify user request into one intent: rag, tool, workflow. "
+        "Routing policy: "
+        "1) Typhoon probability only -> tool. "
+        "2) Typhoon probability + map/visualization in one request -> workflow. "
+        "3) Wind document QA -> rag. "
+        "4) Generic chat -> rag. "
         "Return strict JSON only: {\"intent\":\"...\",\"confidence\":0.xx}."
     )
     user_payload = json.dumps(
-        {"query": query, "file_paths_count": len(file_paths), "data_folder": state.get("data_folder")},
+        {
+            "query": query,
+            "file_paths_count": len(file_paths),
+            "data_folder": state.get("data_folder"),
+            "tool_input_hint": state.get("tool_input_hint"),
+            "typhoon_query": _looks_like_typhoon_query(query_text),
+            "map_query": _looks_like_map_query(query_text),
+        },
         ensure_ascii=False,
     )
 
@@ -338,14 +493,30 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
             next_state,
             step="intent_router",
             status="warn",
-            message="Intent router fallback used.",
+            message="Intent router fallback used (LLM failed).",
             details={"intent": intent, "confidence": confidence, "reason": str(exc)},
+        )
+
+    is_typhoon_query = _infer_preferred_tool(state) == "analyze_typhoon_probability"
+    requires_map = _looks_like_typhoon_query(query_text) and (
+        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
+    )
+    # Guardrail: keep typhoon requests on tool/workflow path even if LLM misclassifies as rag.
+    if is_typhoon_query and intent == "rag":
+        intent = "workflow" if requires_map else "tool"
+        confidence = max(confidence, 0.7)
+        trace(
+            next_state,
+            step="intent_router",
+            status="warn",
+            message="Intent overridden by deterministic typhoon routing guardrail.",
+            details={"intent": intent, "reason": "typhoon query should not route to rag"},
         )
 
     next_state["intent"] = intent
     next_state["intent_confidence"] = confidence
 
-    if intent in {"tool", "workflow"} and not file_paths:
+    if intent in {"tool", "workflow"} and not file_paths and _infer_preferred_tool(state) != "analyze_typhoon_probability":
         _append_warning(next_state, "Intent requires data analysis but no valid .xlsx/.xls file path was provided.")
 
     return next_state
@@ -354,7 +525,14 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
 def workflow_planner(state: AgentFlowState) -> AgentFlowState:
     next_state: AgentFlowState = dict(state)
     intent = state.get("intent", "rag")
-    default_plan = build_default_plan(intent)
+    preferred_tool = _infer_preferred_tool(state)
+    query_text = str(state.get("user_query", ""))
+    if intent == "workflow" and _looks_like_typhoon_query(query_text) and (
+        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
+    ):
+        default_plan = _build_visual_workflow_plan(preferred_tool)
+    else:
+        default_plan = build_default_plan(intent, default_tool=preferred_tool)
 
     if intent == "workflow":
         prompt = (
@@ -366,7 +544,7 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
             {
                 "query": state.get("user_query", ""),
                 "file_paths_count": len(state.get("file_paths", [])),
-                "available_tools": ["analyze_wind_resource"],
+                "available_tools": ["analyze_wind_resource", "analyze_typhoon_probability", "analyze_typhoon_map"],
             },
             ensure_ascii=False,
         )
@@ -380,7 +558,7 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
                 temperature=0.0,
                 max_tokens=300,
             )
-            plan = normalize_workflow_plan(json.loads(raw))
+            plan = normalize_workflow_plan(json.loads(raw), default_tool=preferred_tool)
             next_state["workflow_plan"] = plan
             trace(next_state, "workflow_planner", "ok", "Built workflow plan from LLM.", {"plan": plan})
             return next_state
@@ -447,17 +625,22 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
         trace(next_state, "tool_executor", "skip", "Skipped tool executor because intent is rag.")
         return next_state
 
+    preferred_tool = _infer_preferred_tool(state)
     try:
-        plan = normalize_workflow_plan(list(state.get("workflow_plan", [])) or build_default_plan(intent))
+        plan = normalize_workflow_plan(
+            list(state.get("workflow_plan", [])) or build_default_plan(intent, default_tool=preferred_tool),
+            default_tool=preferred_tool,
+        )
     except Exception as exc:
         _append_warning(next_state, f"Invalid workflow plan, fallback applied: {exc}")
-        plan = build_default_plan(intent)
+        plan = build_default_plan(intent, default_tool=preferred_tool)
     next_state["workflow_plan"] = plan
 
     file_paths = list(state.get("file_paths", []))
 
     workflow_results = list(next_state.get("workflow_results", []))
     batch_results: list[dict[str, Any]] = []
+    last_typhoon_result: dict[str, Any] | None = None
 
     for item in plan:
         step_type = str(item.get("type", "")).strip().lower()
@@ -543,6 +726,93 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
             trace(next_state, "tool_executor", "warn", "Unsupported workflow step type.", {"step": item})
             continue
 
+        tool_name = str(item.get("tool") or item.get("name") or preferred_tool)
+        next_state["selected_tool"] = tool_name
+
+        if tool_name == "analyze_typhoon_probability":
+            payload = _build_typhoon_tool_input(
+                str(state.get("user_query", "")),
+                state.get("tool_input_hint") if isinstance(state.get("tool_input_hint"), dict) else None,
+            )
+            if "lat" not in payload and "points" not in payload:
+                next_state["error"] = "Missing lat/lon for typhoon probability execution."
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=next_state["error"],
+                        started_at=step_started,
+                    )
+                )
+                trace(next_state, "tool_executor", "error", next_state["error"])
+                next_state["workflow_results"] = workflow_results
+                return next_state
+
+            next_state["tool_input"] = payload
+            try:
+                output = TOOL_REGISTRY.execute(tool_name, payload)
+                if isinstance(output, dict):
+                    last_typhoon_result = output
+                batch_item = {"tool": tool_name, "input": payload, "result": output}
+                batch_results.append(batch_item)
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="ok",
+                        data=batch_item,
+                        started_at=step_started,
+                    )
+                )
+                trace(next_state, "tool_executor", "ok", "Executed typhoon probability tool.", {"tool": tool_name})
+            except Exception as exc:
+                _append_warning(next_state, f"Tool execution failed ({tool_name}): {exc}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=str(exc),
+                        started_at=step_started,
+                    )
+                )
+                trace(next_state, "tool_executor", "warn", "Tool execution failed.", {"tool": tool_name, "reason": str(exc)})
+            continue
+
+        if tool_name == "analyze_typhoon_map":
+            map_payload: dict[str, Any] = {}
+            if isinstance(state.get("tool_input_hint"), dict):
+                map_payload.update(dict(state.get("tool_input_hint") or {}))
+            if isinstance(last_typhoon_result, dict):
+                map_payload["typhoon_result"] = last_typhoon_result
+            elif isinstance(next_state.get("tool_result"), dict):
+                map_payload["typhoon_result"] = dict(next_state.get("tool_result") or {})
+
+            next_state["tool_input"] = map_payload
+            try:
+                output = TOOL_REGISTRY.execute(tool_name, map_payload)
+                batch_item = {"tool": tool_name, "input": map_payload, "result": output}
+                batch_results.append(batch_item)
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="ok",
+                        data=batch_item,
+                        started_at=step_started,
+                    )
+                )
+                trace(next_state, "tool_executor", "ok", "Executed typhoon map tool.", {"tool": tool_name})
+            except Exception as exc:
+                _append_warning(next_state, f"Tool execution failed ({tool_name}): {exc}")
+                workflow_results.append(
+                    _new_step_result(
+                        step=item,
+                        status="error",
+                        error=str(exc),
+                        started_at=step_started,
+                    )
+                )
+                trace(next_state, "tool_executor", "warn", "Tool execution failed.", {"tool": tool_name, "reason": str(exc)})
+            continue
+
         if not file_paths:
             next_state["error"] = "Missing excel file path for tool execution."
             trace(next_state, "tool_executor", "error", next_state["error"])
@@ -557,7 +827,6 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
             next_state["workflow_results"] = workflow_results
             return next_state
 
-        tool_name = str(item.get("tool") or item.get("name") or "analyze_wind_resource")
         for file_path in file_paths:
             path = Path(file_path)
             if not path.exists() or not path.is_file():
@@ -573,10 +842,10 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
                 trace(next_state, "tool_executor", "warn", "Excel file missing, skipped.", {"file_path": file_path})
                 continue
 
-            next_state["selected_tool"] = tool_name
-            next_state["tool_input"] = {"excel_path": str(path)}
+            payload = {"excel_path": str(path)}
+            next_state["tool_input"] = payload
             try:
-                output = TOOL_REGISTRY.execute(tool_name, {"excel_path": str(path)})
+                output = TOOL_REGISTRY.execute(tool_name, payload)
                 batch_item = {"tool": tool_name, "excel_path": str(path.resolve()), "result": output}
                 batch_results.append(batch_item)
                 workflow_results.append(
@@ -617,13 +886,13 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
     if batch_results:
         if len(batch_results) == 1:
             next_state["tool_result"] = batch_results[0]["result"]
-            next_state["file_path"] = batch_results[0]["excel_path"]
+            next_state["file_path"] = batch_results[0].get("excel_path")
         else:
             next_state["tool_result"] = {
                 "success": all(bool((item["result"] or {}).get("success")) for item in batch_results),
                 "batch_results": batch_results,
             }
-            next_state["file_path"] = batch_results[0]["excel_path"]
+            next_state["file_path"] = batch_results[0].get("excel_path")
         trace(next_state, "tool_executor", "ok", "Workflow tool execution completed.", {"batch_count": len(batch_results)})
     else:
         _append_warning(next_state, "No tool output produced from workflow execution.")

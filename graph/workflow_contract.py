@@ -45,15 +45,14 @@ def normalize_workflow_plan(raw_plan: Any, *, default_tool: str = "analyze_wind_
     return normalized
 
 
-def build_default_plan(intent: str) -> list[dict[str, Any]]:
+def build_default_plan(intent: str, *, default_tool: str = "analyze_wind_resource") -> list[dict[str, Any]]:
     intent_norm = str(intent or "rag").strip().lower()
     if intent_norm == "tool":
-        return [{"step": 1, "type": "tool", "name": "analyze_wind_resource", "tool": "analyze_wind_resource"}]
+        return [{"step": 1, "type": "tool", "name": default_tool, "tool": default_tool}]
     if intent_norm == "workflow":
         return [
             {"step": 1, "type": "rag", "name": "domain_knowledge"},
-            {"step": 2, "type": "tool", "name": "analyze_wind_resource", "tool": "analyze_wind_resource"},
+            {"step": 2, "type": "tool", "name": default_tool, "tool": default_tool},
             {"step": 3, "type": "llm", "name": "workflow_summary", "goal": "summarize and provide recommendations"},
         ]
     return [{"step": 1, "type": "rag", "name": "domain_knowledge"}]
-

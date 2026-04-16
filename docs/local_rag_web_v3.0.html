@@ -259,6 +259,76 @@
         </div>
         <div id="runStatus" class="status">Waiting for request...</div>
       </section>
+
+      <section class="card" style="grid-column: 1 / -1;">
+        <h2>Typhoon Probability (Generative UI)</h2>
+        <div class="row">
+          <div>
+            <label for="tyModelScope">Model Scope</label>
+            <select id="tyModelScope">
+              <option value="total">Total</option>
+              <option value="scs">SCS</option>
+            </select>
+          </div>
+          <div>
+            <label for="tyWindThreshold">wind_threshold_kt</label>
+            <select id="tyWindThreshold">
+              <option value="50">50</option>
+              <option value="30">30</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tyLat">Latitude</label>
+            <input id="tyLat" type="number" step="0.0001" value="20.9339" />
+          </div>
+          <div>
+            <label for="tyLon">Longitude</label>
+            <input id="tyLon" type="number" step="0.0001" value="112.202" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tyRadiusKm">R_km</label>
+            <input id="tyRadiusKm" type="number" step="1" value="200" />
+          </div>
+          <div>
+            <label for="tyNBoundary">n_boundary</label>
+            <input id="tyNBoundary" type="number" step="1" value="144" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tyYearStart">year_start</label>
+            <input id="tyYearStart" type="number" step="1" value="1976" />
+          </div>
+          <div>
+            <label for="tyYearEnd">year_end</label>
+            <input id="tyYearEnd" type="number" step="1" value="2025" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tyMonths">months (e.g. 1,2,3 or 7-10)</label>
+            <input id="tyMonths" value="1-12" />
+          </div>
+          <div>
+            <label for="tyBstPath">bst_path (optional)</label>
+            <input id="tyBstPath" placeholder="Leave empty to use built-in database" />
+          </div>
+        </div>
+        <div class="row single">
+          <div>
+            <label for="tyPointsJson">Batch points JSON (optional)</label>
+            <textarea id="tyPointsJson" placeholder='[{"lat":20.9,"lon":112.2,"radius_km":100}]'></textarea>
+          </div>
+        </div>
+        <div class="btns2">
+          <button id="btnTyphoonRun" class="primary">Run Typhoon Probability</button>
+          <button id="btnTyphoonFill" class="ghost">Apply Scope Defaults</button>
+        </div>
+      </section>
     </div>
 
     <section class="card" style="margin-top:12px;">
@@ -312,6 +382,20 @@
       previewBox: $("previewBox"),
       latency: $("latency"),
       btnSaveResult: $("btnSaveResult")
+      ,
+      tyModelScope: $("tyModelScope"),
+      tyLat: $("tyLat"),
+      tyLon: $("tyLon"),
+      tyRadiusKm: $("tyRadiusKm"),
+      tyYearStart: $("tyYearStart"),
+      tyYearEnd: $("tyYearEnd"),
+      tyMonths: $("tyMonths"),
+      tyWindThreshold: $("tyWindThreshold"),
+      tyNBoundary: $("tyNBoundary"),
+      tyBstPath: $("tyBstPath"),
+      tyPointsJson: $("tyPointsJson"),
+      btnTyphoonRun: $("btnTyphoonRun"),
+      btnTyphoonFill: $("btnTyphoonFill")
     };
     let lastResponseData = null;
 
@@ -351,6 +435,50 @@
           created_at: new Date().toISOString()
         }
       };
+    }
+
+    function parseMonths(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return null;
+      const out = new Set();
+      text.split(",").forEach((token) => {
+        const t = token.trim();
+        if (!t) return;
+        if (t.includes("-")) {
+          const [a, b] = t.split("-", 2).map((x) => Number(x.trim()));
+          if (Number.isFinite(a) && Number.isFinite(b) && a <= b) {
+            for (let m = a; m <= b; m += 1) if (m >= 1 && m <= 12) out.add(m);
+          }
+          return;
+        }
+        const m = Number(t);
+        if (Number.isFinite(m) && m >= 1 && m <= 12) out.add(m);
+      });
+      return out.size ? Array.from(out).sort((a, b) => a - b) : null;
+    }
+
+    function buildTyphoonInput() {
+      const payload = {
+        model_scope: refs.tyModelScope.value,
+        lat: Number(refs.tyLat.value),
+        lon: Number(refs.tyLon.value),
+        radius_km: Number(refs.tyRadiusKm.value),
+        year_start: Number(refs.tyYearStart.value),
+        year_end: Number(refs.tyYearEnd.value),
+        wind_threshold_kt: Number(refs.tyWindThreshold.value),
+        n_boundary: Number(refs.tyNBoundary.value)
+      };
+      const months = parseMonths(refs.tyMonths.value);
+      if (months) payload.months = months;
+      const bstPath = String(refs.tyBstPath.value || "").trim();
+      if (bstPath) payload.bst_path = bstPath;
+
+      const pointsRaw = String(refs.tyPointsJson.value || "").trim();
+      if (pointsRaw) {
+        const parsed = JSON.parse(pointsRaw);
+        if (Array.isArray(parsed) && parsed.length) payload.points = parsed;
+      }
+      return payload;
     }
 
     async function fetchJson(url, options) {
@@ -508,7 +636,18 @@
         temperature: refs.temperature.value,
         maxTokens: refs.maxTokens.value,
         systemPrompt: refs.systemPrompt.value,
-        userPrompt: refs.userPrompt.value
+        userPrompt: refs.userPrompt.value,
+        tyModelScope: refs.tyModelScope.value,
+        tyLat: refs.tyLat.value,
+        tyLon: refs.tyLon.value,
+        tyRadiusKm: refs.tyRadiusKm.value,
+        tyYearStart: refs.tyYearStart.value,
+        tyYearEnd: refs.tyYearEnd.value,
+        tyMonths: refs.tyMonths.value,
+        tyWindThreshold: refs.tyWindThreshold.value,
+        tyNBoundary: refs.tyNBoundary.value,
+        tyBstPath: refs.tyBstPath.value,
+        tyPointsJson: refs.tyPointsJson.value
       };
       localStorage.setItem(STORE_KEY, JSON.stringify(cfg));
       setStatus(refs.connStatus, "Config saved to localStorage", "ok");
@@ -603,6 +742,66 @@
       }
     }
 
+    function applyTyphoonScopeDefaults() {
+      const scope = refs.tyModelScope.value;
+      if (scope === "scs") {
+        refs.tyRadiusKm.value = "100";
+        refs.tyNBoundary.value = "72";
+      } else {
+        refs.tyRadiusKm.value = "200";
+        refs.tyNBoundary.value = "144";
+      }
+      setStatus(refs.runStatus, "Applied default parameters for " + scope + " model", "ok");
+    }
+
+    async function sendTyphoonProbability() {
+      let typhoonInput;
+      try {
+        typhoonInput = buildTyphoonInput();
+      } catch (err) {
+        setStatus(refs.runStatus, "Invalid batch points JSON: " + (err?.message || String(err)), "err");
+        return;
+      }
+
+      const prompt = refs.userPrompt.value.trim() || `Compute typhoon probability at (${typhoonInput.lat}, ${typhoonInput.lon})`;
+      const payload = buildUnifiedPayload();
+      payload.mode = "wind_agent";
+      payload.messages[1].content = prompt;
+      payload.wind_agent_input = typhoonInput;
+      refs.payloadBox.textContent = JSON.stringify(payload, null, 2);
+      refs.ragBox.textContent = "No output yet.";
+      refs.previewBox.innerHTML = "";
+      refs.answerBox.textContent = "Generating...";
+      setStatus(refs.runStatus, "Requesting typhoon probability...", "warn");
+
+      const t0 = performance.now();
+      try {
+        const resp = await invokeChat(payload);
+        lastResponseData = resp;
+        const ms = Math.round(performance.now() - t0);
+        refs.latency.textContent = "Latency: " + ms + " ms";
+        refs.answerBox.textContent = String(resp?.answer || "(empty)");
+        refs.ragBox.textContent = JSON.stringify(
+          {
+            success: resp?.success,
+            error: resp?.error,
+            trace: resp?.trace || [],
+            analysis: resp?.analysis || {}
+          },
+          null,
+          2
+        );
+        renderPreviewCards(resp?.preview_images || []);
+        setStatus(refs.runStatus, "Typhoon probability request OK", "ok");
+      } catch (err) {
+        lastResponseData = null;
+        refs.answerBox.textContent = "ERROR\n" + (err?.message || String(err));
+        refs.ragBox.textContent = "ERROR";
+        refs.latency.textContent = "Latency: --";
+        setStatus(refs.runStatus, "Request failed: " + (err?.message || String(err)), "err");
+      }
+    }
+
     function simulateRagPayload() {
       const payload = buildUnifiedPayload();
       payload.mode = "rag";
@@ -634,9 +833,15 @@
     $("btnSend").addEventListener("click", sendChat);
     $("btnSimRag").addEventListener("click", simulateRagPayload);
     $("btnSaveResult").addEventListener("click", saveResult);
+    $("btnTyphoonRun").addEventListener("click", sendTyphoonProbability);
+    $("btnTyphoonFill").addEventListener("click", applyTyphoonScopeDefaults);
+    $("tyModelScope").addEventListener("change", applyTyphoonScopeDefaults);
 
     loadConfig();
     applyUrlOverrides();
+    if (!refs.tyRadiusKm.value || !refs.tyNBoundary.value) {
+      applyTyphoonScopeDefaults();
+    }
     refs.payloadBox.textContent = JSON.stringify(buildUnifiedPayload(), null, 2);
   </script>
 </body>

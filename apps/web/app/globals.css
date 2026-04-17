@@ -121,6 +121,16 @@ button, input, textarea, select {
   max-width: 980px;
   margin-left: auto;
   margin-right: auto;
+  transform: translateX(0);
+  transition: transform 0.22s ease;
+}
+
+/* Open sidebar: recenter main content in the remaining visible area.
+   Shift is clamped by current spare margin to avoid overflow on narrower screens. */
+.chat-shell.with-sidebar .chat-main > .chat-header,
+.chat-shell.with-sidebar .chat-main > .chat-body,
+.chat-shell.with-sidebar .chat-main > .composer-wrap {
+  transform: translateX(min(170px, max(0px, calc((100vw - 980px) / 2))));
 }
 
 .chat-header {
@@ -508,6 +518,12 @@ textarea {
   .sidebar-open-btn {
     top: calc(env(safe-area-inset-top, 0px) + 8px);
     left: 10px;
+  }
+
+  .chat-shell.with-sidebar .chat-main > .chat-header,
+  .chat-shell.with-sidebar .chat-main > .chat-body,
+  .chat-shell.with-sidebar .chat-main > .composer-wrap {
+    transform: translateX(0);
   }
 
   .chat-header,

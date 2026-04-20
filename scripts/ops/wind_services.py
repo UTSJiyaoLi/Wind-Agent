@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ALLOWED_SESSIONS = ("wind-vllm-orch", "wind-agent-api", "wind-agent-ui", "wind-rag-unified")
+ALLOWED_SESSIONS = ("wind-vllm-orch", "wind-agent-api", "wind-rag-unified")
 
 
 def _load_dotenv(path: Path) -> None:
@@ -73,11 +73,6 @@ def _build_remote_start_script() -> str:
             f"python -m uvicorn api.app:app --host 0.0.0.0 --port 8005 "
             f"> {logdir}/wind_agent_api.log 2>&1"
         ),
-        "wind-agent-ui": (
-            f"cd {root}; {env_prefix} WIND_AGENT_API_BASE=http://127.0.0.1:8005 apptainer exec --bind {bind} {inforhub_img} "
-            f"streamlit run ui/streamlit_app.py --server.port 8501 --server.address 0.0.0.0 "
-            f"> {logdir}/wind_agent_ui.log 2>&1"
-        ),
         "wind-rag-unified": (
             f"cd {root}; {env_prefix} apptainer exec {'--nv ' if rag_enable_nv else ''}--bind {bind} {inforhub_img} "
             "python scripts/search/rag_local_api.py --host 127.0.0.1 --port 8787 "
@@ -120,7 +115,7 @@ def _build_remote_status_script() -> str:
     lines.extend(
         [
             "echo '=== wind ports ==='",
-            "ss -lntp | grep -E ':(8003|8005|8501|8787)\\b' || true",
+            "ss -lntp | grep -E ':(8003|8005|8787)\\b' || true",
         ]
     )
     return "; ".join(lines)

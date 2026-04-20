@@ -13,7 +13,6 @@
 | `wind-vllm-orch` | Wind Orchestrator vLLM | `vllm.sif` -> `vllm serve :8003` |
 | `fish-fdapp` | Fish 聚合应用 | `yolo_vllm.sif` -> `uvicorn :8004` |
 | `wind-agent-api` | Wind-Agent FastAPI | `inforhub.sif` + bind -> `uvicorn :8005` |
-| `wind-agent-ui` | Wind-Agent Streamlit 前端 | `inforhub.sif` + bind -> `streamlit :8501` |
 | `wind-rag-unified` | Wind RAG/Agent 统一后端 | `inforhub.sif` + bind -> `rag_local_api.py :8787` |
 
 2026-04-16 运维变更记录：
@@ -31,7 +30,6 @@
 | 8003 | 0.0.0.0 | `vllm` | Llama-3.1-8B-Instruct (orchestrator) |
 | 8004 | 0.0.0.0 | `uvicorn` | fish fd_app |
 | 8005 | 0.0.0.0 | `python` | Wind-Agent API |
-| 8501 | 0.0.0.0 | `streamlit` | Wind-Agent UI |
 | 8787 | 127.0.0.1 | `python` | Wind RAG unified backend |
 | 19530/19529/9091 | `*` | `CGO_SQ` | Milvus 组件端口 |
 

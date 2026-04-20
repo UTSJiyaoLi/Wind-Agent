@@ -22,6 +22,12 @@ class AgentFlowState(TypedDict, total=False):
 
     intent: str
     intent_confidence: float
+    domain: str
+    domain_confidence: float
+    domain_candidates: List[str]
+    mode: str
+    mode_confidence: float
+    normalized_query: str
 
     retrieved_context: str
     rag_result: Dict[str, Any]
@@ -33,6 +39,17 @@ class AgentFlowState(TypedDict, total=False):
 
     workflow_plan: List[Dict[str, Any]]
     workflow_results: List[Dict[str, Any]]
+    slots: Dict[str, Any]
+    missing_slots: List[str]
+    risk_level: str
+    need_confirm: bool
+    tool_capability_match: bool
+    route_to: str
+    route_reason: str
+    rule_id: str
+    scores: Dict[str, float]
+    clarify_question: str
+    fallback_reason: str
 
     final_answer: str
     warnings: List[str]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,18 @@ _TOOL_VERBS = {"分析", "计算", "绘图", "画图", "建模", "统计", "pred
 _CHATY_TOKENS = {"你好", "hello", "hi", "thanks", "thank you", "你是谁", "讲个笑话", "天气", "翻译"}
 _TYPHOON_KEYWORDS = {"typhoon", "tropical cyclone", "台风", "风圈", "jma", "bst_all"}
 _MAP_KEYWORDS = {"map", "visual", "visualize", "leaflet", "地图", "可视化"}
+
+
+def _resolve_final_answer_max_tokens(mode: str, requested_max_tokens: int, runtime: Any) -> int:
+    requested = max(1, int(requested_max_tokens or 1))
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in {"rag", "llm_direct"}:
+        return requested
+    try:
+        configured = int(os.getenv("RAG_LONG_ANSWER_MAX_TOKENS", "4096"))
+    except Exception:
+        configured = 4096
+    return max(requested, max(1, configured))
 
 
 def _last_user_message(messages: list[dict[str, Any]]) -> str:
@@ -566,6 +579,7 @@ def _synthesize_subanswers(
     api_key: str,
     model: str,
     timeout_seconds: int,
+    max_tokens: int,
 ) -> str:
     rows = []
     for i, p in enumerate(parts, start=1):
@@ -588,7 +602,7 @@ def _synthesize_subanswers(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=700,
+            max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
         )
     except Exception:
@@ -682,6 +696,7 @@ def handle_chat_request(
     provider = req.get("provider", "vllm")
     messages = req.get("messages") or []
     generation_cfg = req.get("generation_config") or {}
+    requested_max_tokens = int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens))
     retrieval_cfg = req.get("retrieval_config") or {}
     agentic_cfg = _resolve_agentic_cfg(runtime, req.get("agentic") if isinstance(req.get("agentic"), dict) else None)
 
@@ -714,10 +729,11 @@ def handle_chat_request(
                 raise ValueError("No user message found for wind_agent query.")
             agent_input_hint = req.get("wind_agent_input") if isinstance(req.get("wind_agent_input"), dict) else None
             orch_cfg = {
-                "base_url": str(getattr(runtime.args, "orchestrator_base_url", "") or getattr(runtime.args, "llm_base_url", "")),
-                "model": str(getattr(runtime.args, "orchestrator_model", "") or getattr(runtime.args, "llm_model", "")),
-                "api_key": str(getattr(runtime.args, "orchestrator_api_key", "") or getattr(runtime.args, "llm_api_key", "EMPTY")),
-                "timeout_seconds": int(getattr(runtime.args, "orchestrator_timeout_seconds", 60)),
+                "base_url": str(generation_cfg.get("base_url") or getattr(runtime.args, "llm_base_url", "")),
+                "model": str(req.get("model") or getattr(runtime.args, "llm_model", "")),
+                "api_key": str(generation_cfg.get("api_key") or getattr(runtime.args, "llm_api_key", "EMPTY")),
+                "timeout_seconds": int(generation_cfg.get("timeout_seconds") or getattr(runtime.args, "llm_timeout_seconds", 60)),
+                "max_tokens": requested_max_tokens,
             }
             with tracer.span(request_id, "wind_agent", metadata={"query_summary": tracer.summarize_text(user_content)}) as agent_span:
                 agent_result = run_wind_agent_flow(user_content, tool_input_hint=agent_input_hint, llm_config=orch_cfg)
@@ -759,7 +775,11 @@ def handle_chat_request(
             raise ValueError("Missing model in request and server default.")
 
         temperature = float(generation_cfg.get("temperature", runtime.args.llm_temperature))
-        max_tokens = int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens))
+        max_tokens = _resolve_final_answer_max_tokens(
+            mode,
+            int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens)),
+            runtime,
+        )
         llm_base_url = (generation_cfg.get("base_url") or runtime.args.llm_base_url).strip()
         api_key = str(generation_cfg.get("api_key") or runtime.args.llm_api_key)
 
@@ -924,6 +944,7 @@ def handle_chat_request(
                     api_key=api_key,
                     model=model,
                     timeout_seconds=runtime.args.llm_timeout_seconds,
+                    max_tokens=max_tokens,
                 )
                 citations, preview_images = _filter_outputs_by_answer_refs(answer, citations, preview_images)
                 answer = f"{answer}\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"

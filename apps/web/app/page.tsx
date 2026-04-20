@@ -48,6 +48,8 @@ const titleMap: Record<string, string> = {
   alert: "告警",
 };
 
+const DEFAULT_SYSTEM_PROMPT = "你是一个严谨的分析助手，优先使用可验证证据进行回答。";
+
 function trimSlash(v: string) {
   return (v || "").trim().replace(/\/+$/, "");
 }
@@ -74,7 +76,6 @@ function buildPayload(state: {
   mode: string;
   provider: string;
   model: string;
-  systemPrompt: string;
   userPrompt: string;
   temperature: number;
   maxTokens: number;
@@ -108,7 +109,7 @@ function buildPayload(state: {
     provider: state.provider,
     model: state.model.trim(),
     messages: [
-      { role: "system", content: state.systemPrompt.trim() },
+      { role: "system", content: DEFAULT_SYSTEM_PROMPT },
       { role: "user", content: state.userPrompt.trim() },
     ],
     generation_config: {
@@ -204,7 +205,6 @@ export default function Page() {
   const [mode, setMode] = useState("auto");
   const [provider, setProvider] = useState("vllm");
   const [model, setModel] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("你是一个严谨的分析助手，优先使用可验证证据进行回答。");
   const [userPrompt, setUserPrompt] = useState("");
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(768);
@@ -487,7 +487,6 @@ export default function Page() {
       mode,
       provider,
       model,
-      systemPrompt,
       userPrompt,
       temperature,
       maxTokens,
@@ -760,10 +759,6 @@ export default function Page() {
                       <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
                       <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
                       <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
-                    </div>
-                    <div>
-                      <label>系统提示词</label>
-                      <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
                     </div>
                   </div>
 

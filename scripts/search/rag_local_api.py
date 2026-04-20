@@ -46,7 +46,11 @@ try:
 except Exception:
     run_typhoon_probability = None  # type: ignore
 
-from rag.service import _build_rag_user_prompt, handle_chat_request
+from rag.service import _build_rag_user_prompt, _resolve_final_answer_max_tokens, handle_chat_request
+try:
+    from rag.service import _auto_select_mode_with_llm
+except Exception:
+    _auto_select_mode_with_llm = None  # type: ignore
 
 from rag.retrieval import (
     build_citations_and_media,
@@ -177,11 +181,94 @@ def build_app_handler(runtime: Runtime):
                     if isinstance(req_body.get("input"), dict):
                         req_body = req_body["input"]
                     self._send_sse_headers()
-                    mode = str(req_body.get("mode", "auto") or "auto").strip().lower()
-                    if mode != "rag":
+                    requested_mode = str(req_body.get("mode", "auto") or "auto").strip().lower()
+                    effective_mode = requested_mode
+                    if requested_mode == "auto":
+                        messages = req_body.get("messages") or []
+                        if _auto_select_mode_with_llm is not None and isinstance(messages, list):
+                            try:
+                                effective_mode, router_meta = _auto_select_mode_with_llm(messages, runtime, call_vllm_chat)
+                                if not isinstance(effective_mode, str):
+                                    effective_mode = "llm_direct"
+                                effective_mode = effective_mode.strip().lower()
+                                self._write_sse("router", {"requested_mode": "auto", "effective_mode": effective_mode, "meta": router_meta})
+                            except Exception as exc:
+                                effective_mode = "llm_direct"
+                                self._write_sse(
+                                    "router",
+                                    {"requested_mode": "auto", "effective_mode": effective_mode, "meta": {"reason": f"auto router fallback: {exc}"}},
+                                )
+                        else:
+                            effective_mode = "llm_direct"
+                            self._write_sse(
+                                "router",
+                                {"requested_mode": "auto", "effective_mode": effective_mode, "meta": {"reason": "auto router unavailable"}},
+                            )
+
+                    if effective_mode == "llm_direct":
+                        generation_cfg = req_body.get("generation_config") or {}
+                        model = str(req_body.get("model") or runtime.args.llm_model).strip()
+                        llm_base_url = str(generation_cfg.get("base_url") or runtime.args.llm_base_url).strip()
+                        api_key = str(generation_cfg.get("api_key") or runtime.args.llm_api_key)
+                        temperature = float(generation_cfg.get("temperature", runtime.args.llm_temperature))
+                        max_tokens = _resolve_final_answer_max_tokens(
+                            "llm_direct",
+                            int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens)),
+                            runtime,
+                        )
+                        messages = req_body.get("messages") or []
+                        if not model:
+                            self._write_sse("error", {"ok": False, "error": "Missing model in request and server default."})
+                            self._write_sse("done", {"ok": False, "error": "Missing model in request and server default."})
+                            self.close_connection = True
+                            return
+                        self._write_sse(
+                            "meta",
+                            {
+                                "mode": "llm_direct",
+                                "streaming": True,
+                                "client_time": time.time(),
+                                "session_id": str(req_body.get("session_id") or ""),
+                            },
+                        )
+                        answer_parts: list[str] = []
+                        for token in call_vllm_chat_stream(
+                            base_url=llm_base_url,
+                            api_key=api_key,
+                            model=model,
+                            messages=messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            timeout_seconds=runtime.args.llm_timeout_seconds,
+                        ):
+                            answer_parts.append(token)
+                            self._write_sse("token", {"text": token})
+                        answer = "".join(answer_parts)
+                        done_payload = {
+                            "ok": True,
+                            "mode": "llm_direct",
+                            "provider": "vllm",
+                            "model": model,
+                            "answer": answer,
+                            "contexts": [],
+                            "citations": [],
+                            "media_refs": [],
+                            "retrieval_metrics": {},
+                            "elapsed_seconds": round(time.time() - started, 4),
+                            "request_id": str(req_body.get("request_id") or ""),
+                            "session_id": str(req_body.get("session_id") or ""),
+                            "ui_blocks": [{"type": "message", "role": "assistant", "content": answer}],
+                        }
+                        self._write_sse("done", done_payload)
+                        self.close_connection = True
+                        return
+
+                    if effective_mode != "rag":
+                        req_for_mode = dict(req_body)
+                        req_for_mode["mode"] = effective_mode
                         status_code, payload = handle_chat_request(
                             request_path="/api/chat",
-                            req=req_body,
+                            req=req_for_mode,
                             runtime=runtime,
                             run_wind_agent_flow=run_wind_agent_flow,
                             call_vllm_chat=call_vllm_chat,
@@ -197,6 +284,21 @@ def build_app_handler(runtime: Runtime):
                             self._write_sse("done", {"ok": False, "status_code": status_code, "payload": payload})
                             self.close_connection = True
                             return
+                        self._write_sse(
+                            "meta",
+                            {
+                                "mode": str(payload.get("mode") or effective_mode),
+                                "streaming": True,
+                                "client_time": time.time(),
+                                "session_id": str(req_body.get("session_id") or payload.get("session_id") or ""),
+                            },
+                        )
+                        for step_item in payload.get("trace") or []:
+                            if isinstance(step_item, dict):
+                                self._write_sse("step", step_item)
+                        for workflow_item in payload.get("workflow_results") or []:
+                            if isinstance(workflow_item, dict):
+                                self._write_sse("workflow", workflow_item)
                         answer = str(payload.get("answer") or "")
                         step = 24
                         if answer:
@@ -252,7 +354,11 @@ def build_app_handler(runtime: Runtime):
                     llm_base_url = str(generation_cfg.get("base_url") or runtime.args.llm_base_url).strip()
                     api_key = str(generation_cfg.get("api_key") or runtime.args.llm_api_key)
                     temperature = float(generation_cfg.get("temperature", runtime.args.llm_temperature))
-                    max_tokens = int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens))
+                    max_tokens = _resolve_final_answer_max_tokens(
+                        "rag",
+                        int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens)),
+                        runtime,
+                    )
                     messages = retrieve_req.get("messages") or []
                     user_query = ""
                     if isinstance(messages, list):

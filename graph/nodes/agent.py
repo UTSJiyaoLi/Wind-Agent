@@ -1,4 +1,4 @@
-"""Agent 节点实现：请求预处理、意图识别、流程规划、RAG/工具执行与结果解释。"""
+﻿"""Agent nodes: preprocess, routing, workflow planning, execution, and answer synthesis."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,7 @@ def _extract_path_like_tokens(text: str) -> list[str]:
             if token:
                 tokens.append(token)
 
-    folder_hint_pattern = r'([A-Za-z0-9_./\\-]+)\s*(?:文件夹|folder|目录)'
+    folder_hint_pattern = r'([A-Za-z0-9_./\\-]+)\s*(?:鏂囦欢澶箌folder|鐩綍)'
     for match in re.finditer(folder_hint_pattern, text, flags=re.IGNORECASE):
         token = match.group(1).strip().strip("'").strip('"').rstrip(".,;")
         if token:
@@ -135,7 +136,7 @@ def _resolve_excel_candidates(query: str, explicit_hint: str | None) -> tuple[li
     for seed in seeds:
         resolved = _resolve_path(seed)
         if resolved is None:
-            # 仅路径不存在且像文件夹名称时，尝试名称匹配
+            # If path does not exist and looks like a folder name hint, try fuzzy folder match.
             if all(ch not in seed for ch in [":", "\\", "/", ".xlsx", ".xls"]):
                 dir_hits = _find_dirs_by_name(seed)
                 if dir_hits:
@@ -166,13 +167,13 @@ def _resolve_excel_candidates(query: str, explicit_hint: str | None) -> tuple[li
 
 def _looks_like_typhoon_query(query: str) -> bool:
     q = str(query or "").lower()
-    keywords = ("typhoon", "台风", "tropical cyclone", "风圈", "bst_all", "jma", "scs")
+    keywords = ("typhoon", "tropical cyclone", "bst_all", "jma", "scs", "台风", "风圈")
     return any(k in q for k in keywords)
 
 
 def _looks_like_map_query(query: str) -> bool:
     q = str(query or "").lower()
-    keywords = ("map", "地图", "可视化", "visual", "geo", "leaflet")
+    keywords = ("map", "visual", "visualize", "geo", "leaflet", "地图", "可视化")
     return any(k in q for k in keywords)
 
 
@@ -304,6 +305,16 @@ def _default_llm_config() -> dict[str, Any]:
     }
 
 
+def _resolve_llm_max_tokens(state: AgentFlowState, default_value: int) -> int:
+    cfg = state.get("llm_config") or {}
+    try:
+        raw = cfg.get("max_tokens", default_value) if isinstance(cfg, dict) else default_value
+        value = int(raw)
+    except Exception:
+        value = int(default_value)
+    return max(32, min(8192, value))
+
+
 def _call_orchestrator_llm(
     state: AgentFlowState,
     messages: list[dict[str, str]],
@@ -379,7 +390,7 @@ def _new_step_result(*, step: dict[str, Any], status: str, data: dict[str, Any] 
 def input_preprocess(state: AgentFlowState) -> AgentFlowState:
     query = state.get("user_query") or ""
     if not query:
-        # 兼容旧入口字段
+        # Backward-compatible fallback for legacy entry field.
         query = str(state.get("request", "")).strip()  # type: ignore[arg-type]
 
     hint = state.get("file_path")
@@ -424,32 +435,211 @@ def input_preprocess(state: AgentFlowState) -> AgentFlowState:
     return next_state
 
 
-def intent_router(state: AgentFlowState) -> AgentFlowState:
-    next_state: AgentFlowState = dict(state)
-    query = state.get("user_query", "")
-    file_paths = list(state.get("file_paths", []))
-    query_text = str(query or "")
+def _default_routing_policy() -> dict[str, Any]:
+    return {
+        "thresholds": {
+            "domain_confidence": 0.60,
+            "mode_confidence": 0.65,
+        },
+        "rules": [
+            {
+                "id": "R-001",
+                "match": "domain_confidence_below",
+                "route_to": "clarify_node",
+                "reason": "business domain confidence below threshold",
+            },
+            {
+                "id": "R-002",
+                "match": "mode_confidence_below",
+                "route_to": "clarify_node",
+                "reason": "execution mode confidence below threshold",
+            },
+            {
+                "id": "R-003",
+                "match": "missing_slots_for_execution",
+                "route_to": "clarify_node",
+                "reason": "required slots are missing for execution",
+            },
+            {
+                "id": "R-004",
+                "match": "high_risk_confirm",
+                "route_to": "clarify_node",
+                "reason": "high-risk action requires explicit confirmation",
+            },
+            {
+                "id": "R-005",
+                "match": "tool_mismatch",
+                "route_to": "fallback_or_escalation",
+                "reason": "tool capability mismatch",
+            },
+            {
+                "id": "R-101",
+                "match": "mode_is_query",
+                "route_to": "rag_executor",
+                "reason": "query mode with complete context",
+            },
+            {
+                "id": "R-102",
+                "match": "mode_is_batch",
+                "route_to": "workflow_planner",
+                "reason": "batch mode requires multi-step workflow",
+            },
+            {
+                "id": "R-103",
+                "match": "mode_in_mutation",
+                "route_to": "tool_executor",
+                "reason": "single tool execution mode",
+            },
+            {
+                "id": "R-999",
+                "match": "default",
+                "route_to": "clarify_node",
+                "reason": "default clarify fallback",
+            },
+        ],
+    }
 
-    should_tool_fallback = bool(file_paths) or _infer_preferred_tool(state) == "analyze_typhoon_probability"
-    typhoon_with_map = _looks_like_typhoon_query(query_text) and (
-        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
-    )
-    if typhoon_with_map:
-        fallback_intent = "workflow"
+
+def _default_routing_policy_path() -> Path:
+    # graph/nodes/agent.py -> project root
+    root = Path(__file__).resolve().parents[2]
+    return root / "configs" / "agent_routing_policy.json"
+
+
+def _load_routing_policy(state: AgentFlowState) -> dict[str, Any]:
+    policy = deepcopy(_default_routing_policy())
+    cfg_path_raw = os.getenv("AGENT_ROUTING_POLICY_PATH", str(_default_routing_policy_path()))
+    cfg_path = Path(cfg_path_raw).expanduser()
+    if cfg_path.exists():
+        try:
+            loaded = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                thresholds = loaded.get("thresholds")
+                if isinstance(thresholds, dict):
+                    policy["thresholds"].update(
+                        {
+                            "domain_confidence": float(
+                                thresholds.get("domain_confidence", policy["thresholds"]["domain_confidence"])
+                            ),
+                            "mode_confidence": float(
+                                thresholds.get("mode_confidence", policy["thresholds"]["mode_confidence"])
+                            ),
+                        }
+                    )
+                if isinstance(loaded.get("rules"), list):
+                    policy["rules"] = [r for r in loaded["rules"] if isinstance(r, dict)] or policy["rules"]
+        except Exception as exc:
+            _append_warning(state, f"Routing policy config load failed, using defaults: {exc}")
+    return policy
+
+
+def _rule_matches(
+    rule_match: str,
+    *,
+    domain_confidence: float,
+    mode_confidence: float,
+    mode: str,
+    missing_slots: list[str],
+    tool_capability_match: bool,
+    risk_level: str,
+    need_confirm: bool,
+    thresholds: dict[str, float],
+) -> bool:
+    if rule_match == "domain_confidence_below":
+        return domain_confidence < float(thresholds.get("domain_confidence", 0.60))
+    if rule_match == "mode_confidence_below":
+        return mode_confidence < float(thresholds.get("mode_confidence", 0.65))
+    if rule_match == "missing_slots_for_execution":
+        return bool(missing_slots) and mode in {"create", "update", "approve", "batch"}
+    if rule_match == "high_risk_confirm":
+        return need_confirm and risk_level == "high"
+    if rule_match == "tool_mismatch":
+        return not tool_capability_match
+    if rule_match == "mode_is_query":
+        return mode == "query"
+    if rule_match == "mode_is_batch":
+        return mode == "batch"
+    if rule_match == "mode_in_mutation":
+        return mode in {"create", "update", "approve"}
+    if rule_match == "default":
+        return True
+    return False
+
+
+def _infer_slots_and_missing(state: AgentFlowState) -> tuple[dict[str, Any], list[str]]:
+    slots: dict[str, Any] = {}
+    missing_slots: list[str] = []
+    query = str(state.get("user_query", ""))
+    file_paths = list(state.get("file_paths", []))
+
+    if file_paths:
+        slots["excel_paths"] = file_paths
+    if state.get("data_folder"):
+        slots["data_folder"] = state.get("data_folder")
+
+    hint = state.get("tool_input_hint") if isinstance(state.get("tool_input_hint"), dict) else None
+    typhoon_payload = _build_typhoon_tool_input(query, hint)
+    slots["typhoon_payload"] = typhoon_payload
+
+    domain = str(state.get("domain") or "").strip().lower()
+    mode = str(state.get("mode") or "").strip().lower()
+    if domain == "wind_analysis" and mode in {"create", "update", "batch"} and not file_paths:
+        missing_slots.append("excel_path")
+
+    if domain == "typhoon" and mode in {"create", "update", "batch"}:
+        has_point = bool(typhoon_payload.get("points"))
+        has_lat_lon = typhoon_payload.get("lat") is not None and typhoon_payload.get("lon") is not None
+        if not has_point and not has_lat_lon:
+            missing_slots.append("lat_lon")
+        if typhoon_payload.get("radius_km") is None and not has_point:
+            missing_slots.append("radius_km")
+
+    return slots, _dedup_keep_order(missing_slots)
+
+
+def _build_clarify_question(state: AgentFlowState) -> str:
+    missing = list(state.get("missing_slots", []))
+    if "excel_path" in missing:
+        return "请提供可访问的 .xlsx/.xls 文件路径或数据文件夹。"
+    if "lat_lon" in missing and "radius_km" in missing:
+        return "请补充台风分析参数：lat、lon、radius_km（单位 km）。"
+    if "lat_lon" in missing:
+        return "请补充台风分析参数：lat 和 lon。"
+    if "radius_km" in missing:
+        return "请补充台风分析参数：radius_km（单位 km）。"
+    return "请补充业务域或执行意图的关键信息，以便我正确路由。"
+
+
+def _intent_from_mode(mode: str) -> str:
+    norm = str(mode or "").strip().lower()
+    if norm == "query":
+        return "rag"
+    if norm == "batch":
+        return "workflow"
+    if norm in {"create", "update", "approve"}:
+        return "tool"
+    return "rag"
+
+
+def domain_router(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    query = str(state.get("user_query", "")).strip()
+    file_paths = list(state.get("file_paths", []))
+    preferred_tool = _infer_preferred_tool(state)
+
+    if _looks_like_typhoon_query(query) or preferred_tool == "analyze_typhoon_probability":
+        fallback_domain, fallback_confidence, fallback_candidates = "typhoon", 0.90, ["typhoon", "knowledge"]
+    elif file_paths:
+        fallback_domain, fallback_confidence, fallback_candidates = "wind_analysis", 0.85, ["wind_analysis", "knowledge"]
+    elif len(query) <= 1:
+        fallback_domain, fallback_confidence, fallback_candidates = "unknown", 0.45, ["unknown", "knowledge"]
     else:
-        fallback_intent = "tool" if should_tool_fallback else "rag"
-    fallback_confidence = 0.6 if should_tool_fallback else 0.5
+        fallback_domain, fallback_confidence, fallback_candidates = "knowledge", 0.68, ["knowledge", "unknown"]
 
     prompt = (
-        "You are an intent router for a wind-agent system with tools: "
-        "analyze_wind_resource, analyze_typhoon_probability, analyze_typhoon_map. "
-        "Classify user request into one intent: rag, tool, workflow. "
-        "Routing policy: "
-        "1) Typhoon probability only -> tool. "
-        "2) Typhoon probability + map/visualization in one request -> workflow. "
-        "3) Wind document QA -> rag. "
-        "4) Generic chat -> rag. "
-        "Return strict JSON only: {\"intent\":\"...\",\"confidence\":0.xx}."
+        "You are a business-domain router. "
+        "Classify query into one domain: knowledge, wind_analysis, typhoon, unknown. "
+        "Return strict JSON only: {\"domain\":\"...\",\"confidence\":0.xx,\"candidates\":[\"...\",\"...\"]}."
     )
     user_payload = json.dumps(
         {
@@ -457,8 +647,7 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
             "file_paths_count": len(file_paths),
             "data_folder": state.get("data_folder"),
             "tool_input_hint": state.get("tool_input_hint"),
-            "typhoon_query": _looks_like_typhoon_query(query_text),
-            "map_query": _looks_like_map_query(query_text),
+            "typhoon_query": _looks_like_typhoon_query(query),
         },
         ensure_ascii=False,
     )
@@ -471,54 +660,294 @@ def intent_router(state: AgentFlowState) -> AgentFlowState:
                 {"role": "user", "content": user_payload},
             ],
             temperature=0.0,
+            max_tokens=120,
+        )
+        parsed = json.loads(raw)
+        domain = str(parsed.get("domain", fallback_domain)).strip().lower()
+        if domain not in {"knowledge", "wind_analysis", "typhoon", "unknown"}:
+            raise ValueError(f"Unsupported domain: {domain}")
+        confidence = float(parsed.get("confidence", fallback_confidence))
+        candidates_raw = parsed.get("candidates", fallback_candidates)
+        if isinstance(candidates_raw, list):
+            candidates = [str(item).strip().lower() for item in candidates_raw if str(item).strip()]
+        else:
+            candidates = list(fallback_candidates)
+        candidates = _dedup_keep_order(candidates or list(fallback_candidates))
+    except Exception as exc:
+        domain = fallback_domain
+        confidence = fallback_confidence
+        candidates = list(fallback_candidates)
+        _append_warning(next_state, f"Domain router fallback used: {exc}")
+
+    if _looks_like_typhoon_query(query) and domain != "typhoon":
+        domain = "typhoon"
+        confidence = max(confidence, 0.70)
+        candidates = _dedup_keep_order(["typhoon"] + candidates)
+
+    next_state["normalized_query"] = query
+    next_state["domain"] = domain
+    next_state["domain_confidence"] = confidence
+    next_state["domain_candidates"] = candidates
+    scores = dict(next_state.get("scores", {}))
+    scores["domain"] = confidence
+    next_state["scores"] = scores
+
+    trace(
+        next_state,
+        "domain_router",
+        "ok",
+        "Identified business domain.",
+        {"domain": domain, "confidence": confidence, "candidates": candidates},
+    )
+    return next_state
+
+
+def mode_router(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    domain = str(state.get("domain", "unknown")).strip().lower()
+    query = str(state.get("normalized_query", state.get("user_query", ""))).strip()
+
+    if domain == "knowledge":
+        fallback_mode, fallback_confidence = "query", 0.90
+    elif domain == "typhoon":
+        if _looks_like_map_query(query) or _looks_like_typhoon_param_query(query):
+            fallback_mode, fallback_confidence = "batch", 0.88
+        else:
+            fallback_mode, fallback_confidence = "create", 0.82
+    elif domain == "wind_analysis":
+        fallback_mode, fallback_confidence = "create", 0.84
+    else:
+        fallback_mode, fallback_confidence = "clarify", 0.50
+
+    prompt = (
+        "You are an execution-mode router inside a business domain. "
+        "Classify mode into one of: query, create, update, approve, batch, clarify, unknown. "
+        "Return strict JSON only: {\"mode\":\"...\",\"confidence\":0.xx}."
+    )
+    user_payload = json.dumps(
+        {
+            "domain": domain,
+            "query": query,
+            "file_paths_count": len(state.get("file_paths", [])),
+            "tool_input_hint": state.get("tool_input_hint"),
+        },
+        ensure_ascii=False,
+    )
+    try:
+        raw = _call_orchestrator_llm(
+            next_state,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_payload},
+            ],
+            temperature=0.0,
             max_tokens=80,
         )
         parsed = json.loads(raw)
-        intent = str(parsed.get("intent", fallback_intent)).strip().lower()
-        if intent not in {"rag", "tool", "workflow"}:
-            raise ValueError(f"Unsupported intent from LLM: {intent}")
+        mode = str(parsed.get("mode", fallback_mode)).strip().lower()
+        if mode not in {"query", "create", "update", "approve", "batch", "clarify", "unknown"}:
+            raise ValueError(f"Unsupported mode: {mode}")
         confidence = float(parsed.get("confidence", fallback_confidence))
-        trace(
-            next_state,
-            step="intent_router",
-            status="ok",
-            message="Routed user intent via orchestrator LLM.",
-            details={"intent": intent, "confidence": confidence},
-        )
     except Exception as exc:
-        intent = fallback_intent
+        mode = fallback_mode
         confidence = fallback_confidence
-        _append_warning(next_state, f"Intent router fallback used: {exc}")
-        trace(
-            next_state,
-            step="intent_router",
-            status="warn",
-            message="Intent router fallback used (LLM failed).",
-            details={"intent": intent, "confidence": confidence, "reason": str(exc)},
-        )
+        _append_warning(next_state, f"Mode router fallback used: {exc}")
 
-    is_typhoon_query = _infer_preferred_tool(state) == "analyze_typhoon_probability"
-    requires_map = _looks_like_typhoon_query(query_text) and (
-        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
+    if domain == "knowledge" and mode not in {"query", "clarify"}:
+        mode = "query"
+        confidence = max(confidence, 0.70)
+    if domain == "typhoon" and mode == "query":
+        mode = "batch" if (_looks_like_map_query(query) or _looks_like_typhoon_param_query(query)) else "create"
+        confidence = max(confidence, 0.70)
+
+    next_state["mode"] = mode
+    next_state["mode_confidence"] = confidence
+    slots, missing_slots = _infer_slots_and_missing(next_state)
+    next_state["slots"] = slots
+    next_state["missing_slots"] = missing_slots
+    scores = dict(next_state.get("scores", {}))
+    scores["mode"] = confidence
+    next_state["scores"] = scores
+    trace(
+        next_state,
+        "mode_router",
+        "ok",
+        "Identified execution mode.",
+        {"mode": mode, "confidence": confidence, "missing_slots": missing_slots},
     )
-    # Guardrail: keep typhoon requests on tool/workflow path even if LLM misclassifies as rag.
-    if is_typhoon_query and intent == "rag":
-        intent = "workflow" if requires_map else "tool"
-        confidence = max(confidence, 0.7)
-        trace(
-            next_state,
-            step="intent_router",
-            status="warn",
-            message="Intent overridden by deterministic typhoon routing guardrail.",
-            details={"intent": intent, "reason": "typhoon query should not route to rag"},
-        )
+    return next_state
 
-    next_state["intent"] = intent
-    next_state["intent_confidence"] = confidence
 
-    if intent in {"tool", "workflow"} and not file_paths and _infer_preferred_tool(state) != "analyze_typhoon_probability":
-        _append_warning(next_state, "Intent requires data analysis but no valid .xlsx/.xls file path was provided.")
+def policy_gate(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    mode = str(state.get("mode", "unknown")).strip().lower()
+    domain = str(state.get("domain", "unknown")).strip().lower()
+    preferred_tool = _infer_preferred_tool(state)
 
+    if mode in {"approve", "update"}:
+        risk_level = "high"
+    elif mode == "batch":
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+    need_confirm = risk_level == "high"
+
+    tool_capability_match = True
+    intent = _intent_from_mode(mode)
+    if intent in {"tool", "workflow"}:
+        try:
+            if domain == "wind_analysis":
+                TOOL_REGISTRY.get("analyze_wind_resource")
+            elif preferred_tool == "analyze_typhoon_probability":
+                TOOL_REGISTRY.get("analyze_typhoon_probability")
+                if intent == "workflow":
+                    TOOL_REGISTRY.get("analyze_typhoon_map")
+            else:
+                TOOL_REGISTRY.get(preferred_tool)
+        except Exception:
+            tool_capability_match = False
+
+    next_state["risk_level"] = risk_level
+    next_state["need_confirm"] = need_confirm
+    next_state["tool_capability_match"] = tool_capability_match
+    scores = dict(next_state.get("scores", {}))
+    scores["risk"] = 1.0 if risk_level == "high" else (0.6 if risk_level == "medium" else 0.2)
+    next_state["scores"] = scores
+    trace(
+        next_state,
+        "policy_gate",
+        "ok",
+        "Evaluated risk and capability constraints.",
+        {
+            "risk_level": risk_level,
+            "need_confirm": need_confirm,
+            "tool_capability_match": tool_capability_match,
+            "preferred_tool": preferred_tool,
+        },
+    )
+    return next_state
+
+
+def flow_entry(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    policy = _load_routing_policy(next_state)
+    thresholds = policy.get("thresholds", {})
+    rules = policy.get("rules", [])
+    domain_confidence = float(state.get("domain_confidence", 0.0) or 0.0)
+    mode_confidence = float(state.get("mode_confidence", 0.0) or 0.0)
+    mode = str(state.get("mode", "unknown")).strip().lower()
+    missing_slots = list(state.get("missing_slots", []))
+    tool_capability_match = bool(state.get("tool_capability_match", True))
+    risk_level = str(state.get("risk_level", "low")).strip().lower()
+    need_confirm = bool(state.get("need_confirm", False))
+    rule_id, route_to, route_reason = "R-999", "clarify_node", "default clarify fallback"
+    for rule in rules:
+        rule_match = str(rule.get("match", "")).strip()
+        if not _rule_matches(
+            rule_match,
+            domain_confidence=domain_confidence,
+            mode_confidence=mode_confidence,
+            mode=mode,
+            missing_slots=missing_slots,
+            tool_capability_match=tool_capability_match,
+            risk_level=risk_level,
+            need_confirm=need_confirm,
+            thresholds={
+                "domain_confidence": float(thresholds.get("domain_confidence", 0.60) or 0.60),
+                "mode_confidence": float(thresholds.get("mode_confidence", 0.65) or 0.65),
+            },
+        ):
+            continue
+        rule_id = str(rule.get("id", "R-999"))
+        route_to = str(rule.get("route_to", "clarify_node"))
+        route_reason = str(rule.get("reason", "default clarify fallback"))
+        break
+
+    next_state["route_to"] = route_to
+    next_state["route_reason"] = route_reason
+    next_state["rule_id"] = rule_id
+    next_state["clarify_question"] = _build_clarify_question(next_state) if route_to == "clarify_node" else ""
+
+    if route_to == "rag_executor":
+        next_state["intent"] = "rag"
+        next_state["intent_confidence"] = mode_confidence
+    elif route_to == "tool_executor":
+        next_state["intent"] = "tool"
+        next_state["intent_confidence"] = mode_confidence
+        if not next_state.get("workflow_plan"):
+            next_state["workflow_plan"] = build_default_plan("tool", default_tool=_infer_preferred_tool(next_state))
+    elif route_to == "workflow_planner":
+        next_state["intent"] = "workflow"
+        next_state["intent_confidence"] = mode_confidence
+    else:
+        next_state["intent"] = "rag"
+        next_state["intent_confidence"] = max(0.5, mode_confidence)
+
+    trace(
+        next_state,
+        "flow_entry",
+        "ok",
+        "Selected graph branch by routing rules.",
+        {
+            "route_to": route_to,
+            "route_reason": route_reason,
+            "rule_id": rule_id,
+            "domain_confidence": domain_confidence,
+            "mode_confidence": mode_confidence,
+        },
+    )
+    return next_state
+
+
+def next_agent_route(state: AgentFlowState) -> str:
+    route = str(state.get("route_to") or "").strip()
+    if route in {"clarify_node", "fallback_or_escalation", "rag_executor", "tool_executor", "workflow_planner"}:
+        return route
+    return "clarify_node"
+
+
+def clarify_node(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    question = str(state.get("clarify_question") or "").strip() or _build_clarify_question(state)
+    next_state["final_answer"] = f"为继续执行，我需要补充信息：{question}"
+    trace(
+        next_state,
+        "clarify_node",
+        "ok",
+        "Generated clarify question for missing or ambiguous routing context.",
+        {"question": question},
+    )
+    return next_state
+
+
+def fallback_or_escalation(state: AgentFlowState) -> AgentFlowState:
+    next_state: AgentFlowState = dict(state)
+    reason = str(state.get("route_reason") or state.get("fallback_reason") or "tool capability mismatch")
+    next_state["fallback_reason"] = reason
+    next_state["final_answer"] = f"当前请求无法自动执行：{reason}。请检查工具能力或转人工处理。"
+    trace(
+        next_state,
+        "fallback_or_escalation",
+        "warn",
+        "Routed to fallback/escalation branch.",
+        {"reason": reason},
+    )
+    return next_state
+
+
+def intent_router(state: AgentFlowState) -> AgentFlowState:
+    # Backward-compat entrypoint: keep old function name while routing through new graph stages.
+    next_state = domain_router(state)
+    next_state = mode_router(next_state)
+    next_state = policy_gate(next_state)
+    next_state = flow_entry(next_state)
+    trace(
+        next_state,
+        "intent_router",
+        "ok",
+        "Backward-compatible intent routing finished via domain/mode/policy/flow stages.",
+        {"intent": next_state.get("intent"), "route_to": next_state.get("route_to"), "rule_id": next_state.get("rule_id")},
+    )
     return next_state
 
 
@@ -904,6 +1333,9 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
 def answer_synthesizer(state: AgentFlowState) -> AgentFlowState:
     next_state: AgentFlowState = dict(state)
 
+    if str(state.get("final_answer") or "").strip():
+        trace(next_state, "answer_synthesizer", "ok", "Reused prebuilt final answer from upstream branch.")
+        return next_state
     if state.get("error"):
         next_state["final_answer"] = f"执行失败：{state.get('error')}"
         return next_state
@@ -957,12 +1389,17 @@ def answer_synthesizer(state: AgentFlowState) -> AgentFlowState:
                 {"role": "user", "content": user_payload},
             ],
             temperature=0.2,
-            max_tokens=500,
+            max_tokens=_resolve_llm_max_tokens(next_state, 500),
         )
     except Exception as exc:
         _append_warning(next_state, f"Answer synthesizer fallback used: {exc}")
         if isinstance(tool_result, dict) and "batch_results" in tool_result:
-            final_answer = f"分析完成：共处理 {len(tool_result.get('batch_results', []))} 个文件。"
+            batch_count = len(tool_result.get("batch_results", []))
+            detail_text = json.dumps(tool_result, ensure_ascii=False)[:6000]
+            final_answer = (
+                f"分析完成：共处理 {batch_count} 个结果项。\n\n"
+                f"由于总结模型暂不可用，以下为结构化结果摘要（截断展示）：\n{detail_text}"
+            )
         elif isinstance(tool_result, dict) and bool(tool_result.get("success", False)):
             data = tool_result.get("data") or {}
             weibull = data.get("weibull_fit") or {}
@@ -971,10 +1408,11 @@ def answer_synthesizer(state: AgentFlowState) -> AgentFlowState:
                 f"Weibull(k={weibull.get('shape_k')}, A={weibull.get('scale_a')})。"
             )
         elif rag_result:
-            final_answer = "流程执行完成，已获取 RAG 结果，但总结模型不可用。"
+            final_answer = "流程执行完成，已获得 RAG 结果，但总结模型当前不可用。"
         else:
             final_answer = f"流程执行完成，但结果异常：{state.get('warnings', [])}"
 
     next_state["final_answer"] = final_answer
     trace(next_state, "answer_synthesizer", "ok", "Generated final answer.")
     return next_state
+

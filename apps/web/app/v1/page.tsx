@@ -33,6 +33,8 @@ const titleMap: Record<string, string> = {
   alert: "Alert",
 };
 
+const DEFAULT_SYSTEM_PROMPT = "你是一个严谨的分析助手，优先使用可验证证据进行回答。";
+
 function trimSlash(v: string) {
   return (v || "").trim().replace(/\/+$/, "");
 }
@@ -49,7 +51,6 @@ export default function V1Page() {
   const [topK, setTopK] = useState(4);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(768);
-  const [systemPrompt, setSystemPrompt] = useState("You are a rigorous assistant. Use evidence when available.");
   const [userPrompt, setUserPrompt] = useState("");
   const [status, setStatus] = useState("Ready.");
   const [raw, setRaw] = useState("{}");
@@ -63,7 +64,7 @@ export default function V1Page() {
       provider: "vllm",
       ...(model.trim() ? { model: model.trim() } : {}),
       messages: [
-        { role: "system", content: systemPrompt.trim() },
+        { role: "system", content: DEFAULT_SYSTEM_PROMPT },
         { role: "user", content: userPrompt.trim() },
       ],
       generation_config: {
@@ -84,7 +85,7 @@ export default function V1Page() {
         max_subquestions: 3,
       },
     }),
-    [mode, model, systemPrompt, userPrompt, temperature, maxTokens, topK],
+    [mode, model, userPrompt, temperature, maxTokens, topK],
   );
 
   async function send() {
@@ -196,10 +197,6 @@ export default function V1Page() {
         </div>
 
         <div className="v1-row">
-          <div>
-            <label>System Prompt</label>
-            <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
-          </div>
           <div>
             <label>User Prompt</label>
             <textarea value={userPrompt} onChange={(e) => setUserPrompt(e.target.value)} />

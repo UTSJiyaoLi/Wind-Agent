@@ -443,6 +443,10 @@ textarea {
 .status-chip.warn { color: var(--warn); }
 .status-chip.err { color: var(--err); }
 
+.health-details {
+  margin: 0;
+}
+
 .composer-wrap {
   position: sticky;
   bottom: 0;

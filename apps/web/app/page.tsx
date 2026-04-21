@@ -244,6 +244,7 @@ export default function Page() {
   const [rawText, setRawText] = useState("{}");
   const [runtimeText, setRuntimeText] = useState("{}");
   const [healthInfo, setHealthInfo] = useState<any>(null);
+  const [showHealthDetails, setShowHealthDetails] = useState(false);
 
   const [mapSpec, setMapSpec] = useState<any>(null);
   const [mapInfo, setMapInfo] = useState("无地图数据。");
@@ -281,16 +282,13 @@ export default function Page() {
     if (response?.retrieval_metrics && !merged.some((b) => b.type === "metrics")) {
       merged.push({ type: "metrics", items: response.retrieval_metrics });
     }
-    if (healthInfo && Object.keys(healthInfo).length && !merged.some((b) => b.type === "json" && b.title === "health")) {
-      merged.push({ type: "json", title: "health", data: healthInfo });
-    }
     if (runtimeText !== "{}" && !merged.some((b) => b.type === "json" && b.title === "runtime")) {
       try {
         merged.push({ type: "json", title: "runtime", data: JSON.parse(runtimeText) });
       } catch {}
     }
     return merged;
-  }, [blocks, response?.retrieval_metrics, healthInfo, runtimeText]);
+  }, [blocks, response?.retrieval_metrics, runtimeText]);
 
   const mainBlocks = useMemo(() => structuralBlocks.filter((b) => !sideBlockTypes.has(b.type)), [structuralBlocks, sideBlockTypes]);
 
@@ -567,6 +565,7 @@ export default function Page() {
 
   async function checkHealth() {
     setUiStatus("健康检查中...", "warn");
+    setShowHealthDetails(false);
     try {
       const res = await fetch(`${trimSlash(backendUrl)}/health`);
       const text = await res.text();
@@ -808,8 +807,16 @@ export default function Page() {
                     <div className="inline-actions">
                       <button className="ghost-btn" onClick={checkHealth}>健康检查</button>
                       <button className="ghost-btn" onClick={saveResult}>下载结果</button>
+                      {healthInfo ? (
+                        <button className="ghost-btn" onClick={() => setShowHealthDetails((v) => !v)}>
+                          {showHealthDetails ? "隐藏详细信息" : "详细信息"}
+                        </button>
+                      ) : null}
                     </div>
                     <div className={`status-chip ${statusKind}`}>{status}</div>
+                    {healthInfo && showHealthDetails ? (
+                      <pre className="mono slim health-details">{JSON.stringify(healthInfo, null, 2)}</pre>
+                    ) : null}
                   </div>
                 </div>
               </section>

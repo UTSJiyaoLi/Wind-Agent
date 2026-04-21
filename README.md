@@ -1,53 +1,75 @@
 # Wind Resource Agent
 
+A public-friendly FastAPI + RAG/LangGraph backend with a lightweight local Web UI for wind-energy intelligence workflows.
+
+This repository intentionally avoids private usernames, hostnames, and internal infrastructure identifiers.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [What Is Not Included](#what-is-not-included)
+- [Required Assets](#required-assets)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Generic Host Configuration](#generic-host-configuration)
+- [Quick Start](#quick-start)
+- [Operations](#operations)
+- [WSL2 Offline Container Build (Optional)](#wsl2-offline-container-build-optional)
+- [Post-Startup Smoke Checks](#post-startup-smoke-checks)
+- [Project Layout](#project-layout)
+- [API Surface](#api-surface)
+- [Observability](#observability)
+- [Config Hygiene](#config-hygiene)
+- [Testing](#testing)
+
+## Overview
+
 Wind Resource Agent is a FastAPI + RAG/LangGraph backend with a lightweight local Web UI for wind-energy intelligence workflows.
 
-This README is public-friendly: no private usernames, hostnames, or internal infrastructure identifiers are required.
+## What Is Not Included
 
-## What Is NOT Included In This Repository
-
-To make the project reproducible, this section explicitly lists assets that are typically private/large and therefore not shipped in Git.
+To keep the repository reproducible and Git-friendly, the following private or large assets are not included:
 
 1. Foundation/chat model weights
 2. Embedding model weights
 3. Reranker model weights
 4. Vector database persistent data (Milvus data directories)
 5. Internal datasets and metadata indexes
-6. Prebuilt apptainer/singularity images (`*.sif`, offline tar)
+6. Prebuilt Apptainer/Singularity images (`*.sif`, offline tar)
 7. Local/remote secret env files (`.env.local`, `.env.server`)
 
-### Required Asset Checklist
+## Required Assets
 
 Prepare equivalents of the following in your own environment:
 
-- LLM endpoint reachable by backend (local vLLM or remote API)
+- LLM endpoint reachable by the backend (local vLLM or remote API)
 - Embedding model path
 - Reranker model path
 - Metadata files used by retrieval hydration
-- Running Milvus service + collection already built
-- Container image with Python/runtime deps (if using container deployment)
+- Running Milvus service with collection already built
+- Container image with Python/runtime dependencies (if using container deployment)
 
-If these are missing, service may start but retrieval/agent calls will fail.
+If these are missing, the service may start, but retrieval and agent calls will fail.
 
 ## Architecture
 
-- Backend runtime: remote Linux server (recommended via `tmux` + `apptainer`)
-- Frontend runtime: local browser (`docs/local_rag_web_v3.0.html`)
-- Connectivity: local SSH tunnel to remote backend (`127.0.0.1:8787` by default)
+- **Backend runtime:** remote Linux server (recommended via `tmux` + `apptainer`)
+- **Frontend runtime:** local browser (`docs/local_rag_web_v3.0.html`)
+- **Connectivity:** local SSH tunnel to remote backend (`127.0.0.1:8787` by default)
 
 ## Prerequisites
 
 ### Local machine
 
 - Windows PowerShell (`.cmd` scripts)
-- `ssh` client in PATH
-- Conda env `rag_task` for ops/check scripts
+- `ssh` client available in `PATH`
+- Conda environment `rag_task` for ops/check scripts
 
 ### Remote machine
 
-- Linux + `tmux`, `curl`, `apptainer`
-- Accessible model/data paths
-- Milvus and model-serving endpoints available
+- Linux with `tmux`, `curl`, and `apptainer`
+- Accessible model and data paths
+- Available Milvus and model-serving endpoints
 
 ## Generic Host Configuration
 
@@ -56,7 +78,7 @@ Use your own hosts:
 - Jump host: `<jump-user>@<jump-host>`
 - Target host: `<target-user>@<target-host>`
 
-For `wind_services.py`, prefer env vars instead of hardcoded values:
+For `wind_services.py`, prefer environment variables instead of hardcoded values:
 
 - `WIND_JUMP_HOST`
 - `WIND_TARGET_HOST`
@@ -72,14 +94,14 @@ For `wind_services.py`, prefer env vars instead of hardcoded values:
 - `WIND_REMOTE_META_JSONL`
 - `WIND_REMOTE_META_IDX`
 
-If your setup differs, adjust:
+If your setup differs, update:
 
 - `scripts/ops/wind_services.py`
 - `scripts/ops/start_rag_web_local.cmd`
 
 ## Quick Start
 
-### 1) Start/ensure remote backend sessions
+### 1. Start or verify remote backend sessions
 
 ```powershell
 .\scripts\ops\wind_services.cmd start
@@ -92,7 +114,7 @@ Alternative wrapper:
 .\scripts\ops\start_remote_rag_backend_gpu6000.cmd
 ```
 
-### 2) Open local tunnel + Web UI
+### 2. Open the local tunnel and Web UI
 
 ```powershell
 .\scripts\ops\start_rag_web_local.cmd
@@ -104,10 +126,10 @@ Optional fixed local port:
 .\scripts\ops\start_rag_web_local.cmd 19087
 ```
 
-### 3) Web UI fields
+### 3. Web UI fields
 
 - `Mode`: `RAG` or `Wind Agent Tool`
-- `RAG Backend URL`: auto-injected by startup script
+- `RAG Backend URL`: auto-injected by the startup script
 
 ## Operations
 
@@ -132,7 +154,7 @@ cd /mnt/c/wind-agent
 bash scripts/ops/build_apptainer_in_wsl2.sh
 ```
 
-Then upload artifacts to your server and update image references in your ops config.
+Then upload the generated artifacts to your server and update image references in your ops config.
 
 ## Post-Startup Smoke Checks
 
@@ -151,13 +173,15 @@ curl -s -X POST http://127.0.0.1:8787/api/chat \
 
 ## Project Layout
 
-- `api/`: FastAPI endpoints
-- `orchestration/`: LangGraph orchestration
-- `services/`: domain/business logic
-- `tools/`: tool wrappers
-- `scripts/search/rag_local_api.py`: unified RAG/Agent backend
-- `scripts/ops/`: ops scripts (remote start, tunnel, build)
-- `docs/local_rag_web_v3.0.html`: local Web UI
+```text
+api/                         FastAPI endpoints
+orchestration/               LangGraph orchestration
+services/                    Domain and business logic
+tools/                       Tool wrappers
+scripts/search/rag_local_api.py  Unified RAG/Agent backend
+scripts/ops/                 Ops scripts (remote start, tunnel, build)
+docs/local_rag_web_v3.0.html Local Web UI
+```
 
 ## API Surface
 
@@ -186,9 +210,9 @@ Optional LangSmith:
 
 ## Config Hygiene
 
-- Local: copy `.env.local.example` -> `.env.local` (do not commit)
-- Server: copy `.env.server.example` -> `.env.server` (do not commit)
-- Keep secrets and internal paths in env vars, not in code/scripts
+- Local: copy `.env.local.example` to `.env.local` and do not commit it
+- Server: copy `.env.server.example` to `.env.server` and do not commit it
+- Keep secrets and internal paths in environment variables, not in code or scripts
 
 ## Testing
 

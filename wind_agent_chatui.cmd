@@ -88,7 +88,6 @@ if errorlevel 1 (
 
 echo [OK] Open: http://127.0.0.1:%UI_PORT%/
 start "" "http://127.0.0.1:%UI_PORT%/"
-powershell -NoProfile -Command "Start-Process 'http://127.0.0.1:%UI_PORT%/'" >nul 2>nul
 
 echo [DONE] ChatUI started.
 if /I "%SKIP_TUNNEL%"=="1" echo [INFO] Tunnel skipped by SKIP_TUNNEL=1.

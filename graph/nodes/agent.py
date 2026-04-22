@@ -372,6 +372,48 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _build_typhoon_fallback_summary(tool_result: dict[str, Any]) -> str | None:
+    def _pick_probability_result(payload: dict[str, Any]) -> dict[str, Any] | None:
+        if isinstance(payload.get("metrics"), dict):
+            return payload
+        batch = payload.get("batch_results")
+        if isinstance(batch, list):
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("tool") or "") != "analyze_typhoon_probability":
+                    continue
+                result = item.get("result")
+                if isinstance(result, dict) and isinstance(result.get("metrics"), dict):
+                    return result
+        return None
+
+    prob = _pick_probability_result(tool_result)
+    if not prob:
+        return None
+
+    metrics = prob.get("metrics") or {}
+    model_scope = str(prob.get("model_scope") or prob.get("input", {}).get("model_scope") or "").lower()
+
+    if model_scope == "scs":
+        return (
+            "台风概率分析完成（SCS）。"
+            f"N_all={metrics.get('N_all')}，"
+            f"N_enterSCS={metrics.get('N_enterSCS')}，"
+            f"N_hit={metrics.get('N_hit')}，"
+            f"P(impact|SCS)={metrics.get('p_cond_impact_given_SCS')}，"
+            f"P(impact∩SCS)={metrics.get('p_abs_impact_and_SCS')}。"
+        )
+
+    return (
+        "台风概率分析完成（Total）。"
+        f"N_storm={metrics.get('N_storm')}，"
+        f"N_hit={metrics.get('N_hit')}，"
+        f"P_storm={metrics.get('p_storm')}，"
+        f"P_year={metrics.get('p_year')}。"
+    )
+
+
 def _new_step_result(*, step: dict[str, Any], status: str, data: dict[str, Any] | None = None, error: str | None = None, started_at: float | None = None) -> dict[str, Any]:
     started = started_at if started_at is not None else time.time()
     return {
@@ -756,8 +798,9 @@ def mode_router(state: AgentFlowState) -> AgentFlowState:
     if domain == "knowledge" and mode not in {"query", "clarify"}:
         mode = "query"
         confidence = max(confidence, 0.70)
-    if domain == "typhoon" and mode == "query":
-        mode = "batch" if (_looks_like_map_query(query) or _looks_like_typhoon_param_query(query)) else "create"
+    if domain == "typhoon" and mode != "clarify":
+        # Typhoon requests should run deterministic workflow (probability + map) instead of single-tool path.
+        mode = "batch"
         confidence = max(confidence, 0.70)
 
     next_state["mode"] = mode
@@ -956,14 +999,18 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
     intent = state.get("intent", "rag")
     preferred_tool = _infer_preferred_tool(state)
     query_text = str(state.get("user_query", ""))
-    if intent == "workflow" and _looks_like_typhoon_query(query_text) and (
-        _looks_like_map_query(query_text) or _looks_like_typhoon_param_query(query_text)
-    ):
+    if intent == "workflow" and _looks_like_typhoon_query(query_text):
         default_plan = _build_visual_workflow_plan(preferred_tool)
     else:
         default_plan = build_default_plan(intent, default_tool=preferred_tool)
 
     if intent == "workflow":
+        # Typhoon workflow is fixed and should always include map generation.
+        if _looks_like_typhoon_query(query_text):
+            next_state["workflow_plan"] = normalize_workflow_plan(default_plan, default_tool=preferred_tool)
+            trace(next_state, "workflow_planner", "ok", "Built deterministic typhoon workflow plan.", {"plan": next_state["workflow_plan"]})
+            return next_state
+
         prompt = (
             "You are a workflow planner. Generate execution plan in JSON list. "
             "Allowed step types: rag, tool, llm. "
@@ -988,6 +1035,9 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
                 max_tokens=300,
             )
             plan = normalize_workflow_plan(json.loads(raw), default_tool=preferred_tool)
+            plan = [s for s in plan if str(s.get("type", "")).lower() != "rag"]
+            if not plan:
+                plan = normalize_workflow_plan(default_plan, default_tool=preferred_tool)
             next_state["workflow_plan"] = plan
             trace(next_state, "workflow_planner", "ok", "Built workflow plan from LLM.", {"plan": plan})
             return next_state
@@ -1076,29 +1126,15 @@ def tool_executor(state: AgentFlowState) -> AgentFlowState:
         step_started = time.time()
 
         if step_type == "rag":
-            try:
-                rag_result = _run_rag_query(next_state, str(state.get("user_query", "")))
-                next_state["rag_result"] = rag_result
-                workflow_results.append(
-                    _new_step_result(
-                        step=item,
-                        status="ok",
-                        data={"rag_result": rag_result},
-                        started_at=step_started,
-                    )
+            workflow_results.append(
+                _new_step_result(
+                    step=item,
+                    status="skip",
+                    data={"reason": "rag_disabled_for_non_rag_modes"},
+                    started_at=step_started,
                 )
-                trace(next_state, "tool_executor", "ok", "Executed workflow rag step.", {"step": item})
-            except Exception as exc:
-                _append_warning(next_state, f"Workflow rag step failed: {exc}")
-                workflow_results.append(
-                    _new_step_result(
-                        step=item,
-                        status="error",
-                        error=str(exc),
-                        started_at=step_started,
-                    )
-                )
-                trace(next_state, "tool_executor", "warn", "Workflow rag step failed.", {"step": item, "reason": str(exc)})
+            )
+            trace(next_state, "tool_executor", "skip", "Skipped workflow rag step (disabled outside rag mode).", {"step": item})
             continue
 
         if step_type == "llm":
@@ -1394,6 +1430,12 @@ def answer_synthesizer(state: AgentFlowState) -> AgentFlowState:
     except Exception as exc:
         _append_warning(next_state, f"Answer synthesizer fallback used: {exc}")
         if isinstance(tool_result, dict) and "batch_results" in tool_result:
+            typhoon_text = _build_typhoon_fallback_summary(tool_result)
+            if typhoon_text:
+                final_answer = typhoon_text
+                next_state["final_answer"] = final_answer
+                trace(next_state, "answer_synthesizer", "ok", "Generated fallback typhoon summary from tool result.")
+                return next_state
             batch_count = len(tool_result.get("batch_results", []))
             detail_text = json.dumps(tool_result, ensure_ascii=False)[:6000]
             final_answer = (
@@ -1401,6 +1443,12 @@ def answer_synthesizer(state: AgentFlowState) -> AgentFlowState:
                 f"由于总结模型暂不可用，以下为结构化结果摘要（截断展示）：\n{detail_text}"
             )
         elif isinstance(tool_result, dict) and bool(tool_result.get("success", False)):
+            typhoon_text = _build_typhoon_fallback_summary(tool_result)
+            if typhoon_text:
+                final_answer = typhoon_text
+                next_state["final_answer"] = final_answer
+                trace(next_state, "answer_synthesizer", "ok", "Generated fallback typhoon summary from tool result.")
+                return next_state
             data = tool_result.get("data") or {}
             weibull = data.get("weibull_fit") or {}
             final_answer = (

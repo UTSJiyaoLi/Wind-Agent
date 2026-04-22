@@ -200,6 +200,91 @@ function toZhCaption(rawTitle: string): string {
   return "图像";
 }
 
+function extractMapSpec(payload: any): any | null {
+  const analysis = payload?.analysis || payload || {};
+  const direct =
+    analysis?.map_spec ||
+    analysis?.result?.map_spec ||
+    payload?.map_spec ||
+    payload?.result?.map_spec ||
+    payload?.data?.result?.map_spec;
+  if (direct?.center) return direct;
+
+  const batches: any[] = [];
+  if (Array.isArray(analysis?.batch_results)) batches.push(...analysis.batch_results);
+  if (Array.isArray(payload?.batch_results)) batches.push(...payload.batch_results);
+  if (Array.isArray(payload?.workflow_results)) {
+    for (const item of payload.workflow_results) {
+      if (item && typeof item === "object") batches.push(item);
+    }
+  }
+
+  for (const item of batches) {
+    if (!item || typeof item !== "object") continue;
+    const tool = String(item?.tool || item?.data?.tool || "");
+    const spec = item?.result?.map_spec || item?.data?.result?.map_spec;
+    if (tool === "analyze_typhoon_map" && spec?.center) return spec;
+  }
+  return null;
+}
+
+function isVerboseBatchJsonBlock(block: UiBlock): boolean {
+  if (block.type !== "json") return false;
+  const data = block.data || {};
+  if (Array.isArray((data as any).batch_results)) return true;
+  const asText = JSON.stringify(data || {});
+  return asText.includes("\"batch_results\"");
+}
+
+function extractTyphoonProbabilityResult(payload: any): any | null {
+  const analysis = payload?.analysis || payload || {};
+  if (analysis?.metrics && (analysis?.model_scope || analysis?.input?.model_scope)) {
+    return analysis;
+  }
+  const batches: any[] = [];
+  if (Array.isArray(analysis?.batch_results)) batches.push(...analysis.batch_results);
+  if (Array.isArray(payload?.batch_results)) batches.push(...payload.batch_results);
+  for (const item of batches) {
+    if (!item || typeof item !== "object") continue;
+    if (String(item?.tool || item?.data?.tool || "") !== "analyze_typhoon_probability") continue;
+    const res = item?.result || item?.data?.result;
+    if (res && typeof res === "object" && res?.metrics) return res;
+  }
+  return null;
+}
+
+function buildTyphoonMarkdownSummary(payload: any): string {
+  const prob = extractTyphoonProbabilityResult(payload);
+  if (!prob || typeof prob !== "object") return "台风分析已完成。";
+  const scope = String(prob?.model_scope || prob?.input?.model_scope || "total").toLowerCase();
+  const m = prob?.metrics || {};
+  const input = prob?.input || {};
+  const lat = input?.lat ?? "--";
+  const lon = input?.lon ?? "--";
+  const radius = input?.radius_km ?? "--";
+
+  if (scope === "scs") {
+    return [
+      "### 台风概率分析（SCS）",
+      `- 目标点：lat=${lat}，lon=${lon}，R=${radius}km`,
+      `- 样本总数（N_all）：${m?.N_all ?? "--"}`,
+      `- 入南海样本（N_enterSCS）：${m?.N_enterSCS ?? "--"}`,
+      `- 命中样本（N_hit）：${m?.N_hit ?? "--"}`,
+      `- 条件概率 P(impact|SCS)：${m?.p_cond_impact_given_SCS ?? "--"}`,
+      `- 绝对概率 P(impact∩SCS)：${m?.p_abs_impact_and_SCS ?? "--"}`,
+    ].join("\n");
+  }
+
+  return [
+    "### 台风概率分析（Total）",
+    `- 目标点：lat=${lat}，lon=${lon}，R=${radius}km`,
+    `- 台风总数（N_storm）：${m?.N_storm ?? "--"}`,
+    `- 命中样本（N_hit）：${m?.N_hit ?? "--"}`,
+    `- 风暴命中概率 P_storm：${m?.p_storm ?? "--"}`,
+    `- 年命中概率 P_year：${m?.p_year ?? "--"}`,
+  ].join("\n");
+}
+
 export default function Page() {
   const [backendUrl, setBackendUrl] = useState(process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8787");
   const [mode, setMode] = useState("auto");
@@ -273,8 +358,6 @@ export default function Page() {
     setSessionId(value);
   }, []);
   const hasMapSection = useMemo(() => !!mapSpec, [mapSpec]);
-  const shouldShowTyphoonPanel = mode === "wind_agent" || mode === "typhoon_model";
-  const showRagPanel = useMemo(() => mode === "rag" || mode === "auto" || !!response?.retrieval_metrics, [mode, response?.retrieval_metrics]);
   const sideBlockTypes = useMemo(() => new Set(["agentic_trace_timeline", "metrics", "meta", "agentic_grades"]), []);
 
   const structuralBlocks = useMemo(() => {
@@ -282,13 +365,8 @@ export default function Page() {
     if (response?.retrieval_metrics && !merged.some((b) => b.type === "metrics")) {
       merged.push({ type: "metrics", items: response.retrieval_metrics });
     }
-    if (runtimeText !== "{}" && !merged.some((b) => b.type === "json" && b.title === "runtime")) {
-      try {
-        merged.push({ type: "json", title: "runtime", data: JSON.parse(runtimeText) });
-      } catch {}
-    }
     return merged;
-  }, [blocks, response?.retrieval_metrics, runtimeText]);
+  }, [blocks, response?.retrieval_metrics]);
 
   const mainBlocks = useMemo(() => structuralBlocks.filter((b) => !sideBlockTypes.has(b.type)), [structuralBlocks, sideBlockTypes]);
 
@@ -301,7 +379,7 @@ export default function Page() {
         return id === "save_result" || id === "copy_request_id";
       });
     });
-    const filteredBlocks = effectiveBlocks.filter((b) => b.type !== "actions");
+    const filteredBlocks = effectiveBlocks.filter((b) => b.type !== "actions" && !isVerboseBatchJsonBlock(b));
     const galleries = filteredBlocks.filter((b) => b.type === "gallery");
     const nonGallery = filteredBlocks.filter((b) => b.type !== "gallery");
     if (!galleries.length) return nonGallery;
@@ -326,14 +404,35 @@ export default function Page() {
   }
 
   function onSseEvent(evt: SseEvent) {
+    const typhoonUiOnlyMap = mode === "typhoon_model";
+
     if (evt.event === "token") {
+      if (typhoonUiOnlyMap) return;
       const token = String(evt.data?.text || "");
       if (token) setStreamedAnswer((prev) => prev + token);
       return;
     }
 
     if (evt.event === "block") {
+      if (typhoonUiOnlyMap) return;
       if (evt.data && typeof evt.data === "object") setBlocks((prev) => [...prev, evt.data as UiBlock]);
+      return;
+    }
+
+    if (evt.event === "workflow") {
+      if (typhoonUiOnlyMap) {
+        const spec = extractMapSpec(evt.data);
+        if (spec?.center) {
+          setMapSpec(spec);
+          setMapInfo(JSON.stringify(spec, null, 2));
+        }
+        return;
+      }
+      const spec = extractMapSpec(evt.data);
+      if (spec?.center) {
+        setMapSpec(spec);
+        setMapInfo(JSON.stringify(spec, null, 2));
+      }
       return;
     }
 
@@ -344,6 +443,36 @@ export default function Page() {
 
     if (evt.event === "done") {
       const payload = evt.data as ChatResponse;
+      if (typhoonUiOnlyMap) {
+        const summary = buildTyphoonMarkdownSummary(payload);
+        const spec = extractMapSpec(payload);
+        const patched: ChatResponse = {
+          ...payload,
+          answer: summary,
+          ui_blocks: [{ type: "message", role: "assistant", content: summary }],
+        };
+        if (spec?.center) {
+          setMapSpec(spec);
+          setMapInfo(JSON.stringify(spec, null, 2));
+        }
+        setStreamedAnswer("");
+        setResponse(patched);
+        setBlocks([{ type: "message", role: "assistant", content: summary }]);
+        setRawText(JSON.stringify(patched, null, 2));
+        setRuntimeText(
+          JSON.stringify(
+            {
+              client_time: new Date().toISOString(),
+              elapsed_seconds: patched?.elapsed_seconds ?? "--",
+              mode: patched?.mode ?? mode,
+            },
+            null,
+            2,
+          ),
+        );
+        setUiStatus("请求成功。", "ok");
+        return;
+      }
       setResponse(payload);
       setRawText(JSON.stringify(payload, null, 2));
       setRuntimeText(
@@ -361,14 +490,7 @@ export default function Page() {
         setBlocks((prev) => mergeBlocks(prev, payload.ui_blocks!));
       }
 
-      const analysis = payload?.analysis || {};
-      const spec =
-        analysis?.map_spec ||
-        analysis?.result?.map_spec ||
-        (Array.isArray(analysis?.batch_results)
-          ? (analysis.batch_results.find((x: any) => x?.tool === "analyze_typhoon_map") || {})?.result?.map_spec
-          : null);
-
+      const spec = extractMapSpec(payload);
       if (spec?.center) {
         setMapSpec(spec);
         setMapInfo(JSON.stringify(spec, null, 2));
@@ -539,8 +661,30 @@ export default function Page() {
       setUiStatus(`流式接口不可用（HTTP ${res.status}），尝试非流式接口...`, "warn");
       const fallback = await tryNonStreamEndpoints(payload, controller.signal);
       const json = fallback.response;
-      setResponse(json);
-      setBlocks(Array.isArray(json?.ui_blocks) ? json.ui_blocks : []);
+      const typhoonUiOnlyMap = mode === "typhoon_model";
+      if (typhoonUiOnlyMap) {
+        const summary = buildTyphoonMarkdownSummary(json);
+        const spec = extractMapSpec(json);
+        const patched: ChatResponse = {
+          ...json,
+          answer: summary,
+          ui_blocks: [{ type: "message", role: "assistant", content: summary }],
+        };
+        setResponse(patched);
+        setBlocks([{ type: "message", role: "assistant", content: summary }]);
+        if (spec?.center) {
+          setMapSpec(spec);
+          setMapInfo(JSON.stringify(spec, null, 2));
+        }
+      } else {
+        setResponse(json);
+        setBlocks(Array.isArray(json?.ui_blocks) ? json.ui_blocks : []);
+      }
+      const spec = extractMapSpec(json);
+      if (spec?.center) {
+        setMapSpec(spec);
+        setMapInfo(JSON.stringify(spec, null, 2));
+      }
       setRawText(JSON.stringify(json, null, 2));
       setRuntimeText(
         JSON.stringify(
@@ -761,46 +905,42 @@ export default function Page() {
                     </div>
                   </div>
 
-                  {showRagPanel ? (
-                    <div className="settings-block">
-                      <div className="settings-title">RAG</div>
-                      <div className="check-grid">
-                        <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
-                        <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
-                        <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
+                  <div className="settings-block">
+                    <div className="settings-title">RAG</div>
+                    <div className="check-grid">
+                      <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
+                      <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
+                      <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
+                    </div>
+                    <div className="field-grid three">
+                      <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
+                      <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
+                      <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
+                      <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
+                      <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
+                      <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
+                    </div>
+                  </div>
+
+                  <div className="settings-block">
+                    <div className="settings-title">台风参数</div>
+                    <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
+                    <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
+                      <div className="field-grid two">
+                        <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
+                        <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
                       </div>
                       <div className="field-grid three">
-                        <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
-                        <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
-                        <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
-                        <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
-                        <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
-                        <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
+                        <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
+                        <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
+                        <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
+                        <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
+                        <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
+                        <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
                       </div>
-                    </div>
-                  ) : null}
-
-                  {shouldShowTyphoonPanel ? (
-                    <div className="settings-block">
-                      <div className="settings-title">台风参数</div>
-                      <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
-                      <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
-                        <div className="field-grid two">
-                          <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
-                          <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
-                        </div>
-                        <div className="field-grid three">
-                          <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
-                          <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
-                          <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
-                          <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
-                          <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
-                          <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
-                        </div>
-                        <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
-                      </fieldset>
-                    </div>
-                  ) : null}
+                      <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
+                    </fieldset>
+                  </div>
 
                   <div className="settings-block">
                     <div className="settings-title">工具</div>
@@ -814,6 +954,7 @@ export default function Page() {
                       ) : null}
                     </div>
                     <div className={`status-chip ${statusKind}`}>{status}</div>
+                    <pre className="mono slim">{runtimeText === "{}" ? '{\n  "client_time": "--",\n  "elapsed_seconds": "--",\n  "mode": "--"\n}' : runtimeText}</pre>
                     {healthInfo && showHealthDetails ? (
                       <pre className="mono slim health-details">{JSON.stringify(healthInfo, null, 2)}</pre>
                     ) : null}

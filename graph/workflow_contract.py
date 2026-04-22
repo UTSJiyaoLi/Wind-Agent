@@ -51,8 +51,7 @@ def build_default_plan(intent: str, *, default_tool: str = "analyze_wind_resourc
         return [{"step": 1, "type": "tool", "name": default_tool, "tool": default_tool}]
     if intent_norm == "workflow":
         return [
-            {"step": 1, "type": "rag", "name": "domain_knowledge"},
-            {"step": 2, "type": "tool", "name": default_tool, "tool": default_tool},
-            {"step": 3, "type": "llm", "name": "workflow_summary", "goal": "summarize and provide recommendations"},
+            {"step": 1, "type": "tool", "name": default_tool, "tool": default_tool},
+            {"step": 2, "type": "llm", "name": "workflow_summary", "goal": "summarize and provide recommendations"},
         ]
     return [{"step": 1, "type": "rag", "name": "domain_knowledge"}]

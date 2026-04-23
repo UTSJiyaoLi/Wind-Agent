@@ -52,6 +52,19 @@ function trimSlash(v: string) {
   return (v || "").trim().replace(/\/+$/, "");
 }
 
+function extractPrimaryAnswer(payload: any): string {
+  const text = [
+    payload?.answer,
+    payload?.summary,
+    payload?.final_answer,
+    payload?.output_text,
+    payload?.response,
+    payload?.data?.answer,
+    payload?.data?.summary,
+  ].find((v) => typeof v === "string" && String(v).trim());
+  return String(text || "").trim();
+}
+
 function parseSseChunk(chunk: string): SseEvent | null {
   const lines = chunk.split(/\r?\n/).filter(Boolean);
   let event = "message";
@@ -262,6 +275,20 @@ function extractTyphoonProbabilityResult(payload: any): any | null {
   return null;
 }
 
+function formatPct(value: any): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "--";
+  return `${(n * 100).toFixed(2)}%`;
+}
+
+function classifyRisk(value: any): string {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "未识别";
+  if (n >= 0.2) return "高";
+  if (n >= 0.1) return "中等";
+  return "偏低";
+}
+
 function extractWindAnalysisGalleryItems(payload: any): any[] {
   const charts = Array.isArray(payload?.analysis?.data?.charts) ? payload.analysis.data.charts : [];
   return charts
@@ -283,25 +310,54 @@ function buildTyphoonMarkdownSummary(payload: any): string {
   const radius = input?.radius_km ?? "--";
 
   if (scope === "scs") {
+    const cond = Number(m?.p_cond_impact_given_SCS);
+    const abs = Number(m?.p_abs_impact_and_SCS);
+    const pYear = Number(m?.p_year);
+    const risk = classifyRisk(cond);
     return [
-      "### 台风概率分析（SCS）",
+      "### 台风预测结论（SCS）",
+      `目标点位于 lat=${lat}、lon=${lon}，统计半径 ${radius}km。基于南海样本回溯，这个点位的台风影响风险为**${risk}**。`,
+      `从已进入南海的历史台风看，命中该点位的条件概率约为 **${formatPct(cond)}**；若按全部样本计，绝对命中概率约为 **${formatPct(abs)}**；折算成年尺度，年内至少受一次影响的概率约为 **${formatPct(pYear)}**。`,
+      "这是一种历史统计意义上的概率结论，不表示单个台风过程的确定性落点，但可以作为站址风险筛查和方案比选的先验参考。",
+      "",
+      "### 关键指标",
       `- 目标点：lat=${lat}，lon=${lon}，R=${radius}km`,
       `- 样本总数（N_all）：${m?.N_all ?? "--"}`,
       `- 入南海样本（N_enterSCS）：${m?.N_enterSCS ?? "--"}`,
       `- 命中样本（N_hit）：${m?.N_hit ?? "--"}`,
-      `- 条件概率 P(impact|SCS)：${m?.p_cond_impact_given_SCS ?? "--"}`,
-      `- 绝对概率 P(impact∩SCS)：${m?.p_abs_impact_and_SCS ?? "--"}`,
+      `- 条件概率 P(impact|SCS)：${formatPct(cond)}`,
+      `- 绝对概率 P(impact∩SCS)：${formatPct(abs)}`,
+      `- 年命中概率 P_year：${formatPct(pYear)}`,
     ].join("\n");
   }
 
+  const pStorm = Number(m?.p_storm);
+  const pYear = Number(m?.p_year);
+  const risk = classifyRisk(pStorm);
   return [
-    "### 台风概率分析（Total）",
+    "### 台风预测结论（Total）",
+    `目标点位于 lat=${lat}、lon=${lon}，统计半径 ${radius}km。基于全样本回溯，这个点位的历史台风影响风险为**${risk}**。`,
+    `按风暴事件计，单个台风命中该点位的概率约为 **${formatPct(pStorm)}**；折算到年尺度，年内至少受一次影响的概率约为 **${formatPct(pYear)}**。`,
+    "该结论反映的是历史统计风险，不替代具体台风过程的路径和强度预报。",
+    "",
+    "### 关键指标",
     `- 目标点：lat=${lat}，lon=${lon}，R=${radius}km`,
     `- 台风总数（N_storm）：${m?.N_storm ?? "--"}`,
     `- 命中样本（N_hit）：${m?.N_hit ?? "--"}`,
-    `- 风暴命中概率 P_storm：${m?.p_storm ?? "--"}`,
-    `- 年命中概率 P_year：${m?.p_year ?? "--"}`,
+    `- 风暴命中概率 P_storm：${formatPct(pStorm)}`,
+    `- 年命中概率 P_year：${formatPct(pYear)}`,
   ].join("\n");
+}
+
+function applyTyphoonNarrative(payload: ChatResponse): ChatResponse {
+  if (!extractTyphoonProbabilityResult(payload)) return payload;
+  const summary = buildTyphoonMarkdownSummary(payload);
+  const existingBlocks = Array.isArray(payload?.ui_blocks) ? payload.ui_blocks.filter((b) => b.type !== "message") : [];
+  return {
+    ...payload,
+    answer: summary,
+    ui_blocks: [{ type: "message", role: "assistant", content: summary }, ...existingBlocks],
+  };
 }
 
 export default function Page() {
@@ -356,6 +412,7 @@ export default function Page() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
 
   const mapRef = useRef<LeafletMap | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapLayersRef = useRef<Layer[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -493,28 +550,38 @@ export default function Page() {
         setUiStatus("请求成功。", "ok");
         return;
       }
-      setResponse(payload);
-      setRawText(JSON.stringify(payload, null, 2));
+      const normalizedPayload: ChatResponse = { ...(payload || {}) };
+      const primaryAnswer = extractPrimaryAnswer(normalizedPayload);
+      if (!normalizedPayload.answer && primaryAnswer) {
+        normalizedPayload.answer = primaryAnswer;
+      }
+      if (!Array.isArray(normalizedPayload.ui_blocks) && primaryAnswer) {
+        normalizedPayload.ui_blocks = [{ type: "message", role: "assistant", content: primaryAnswer }];
+      }
+      const finalPayload = applyTyphoonNarrative(normalizedPayload);
+
+      setResponse(finalPayload);
+      setRawText(JSON.stringify(finalPayload, null, 2));
       setRuntimeText(
         JSON.stringify(
           {
             client_time: new Date().toISOString(),
-            elapsed_seconds: payload?.elapsed_seconds ?? "--",
-            mode: payload?.mode ?? mode,
+            elapsed_seconds: finalPayload?.elapsed_seconds ?? "--",
+            mode: finalPayload?.mode ?? mode,
           },
           null,
           2,
         ),
       );
-      if (Array.isArray(payload?.ui_blocks) && payload.ui_blocks.length) {
-        setBlocks((prev) => mergeBlocks(prev, payload.ui_blocks!));
+      if (Array.isArray(finalPayload?.ui_blocks) && finalPayload.ui_blocks.length) {
+        setBlocks((prev) => mergeBlocks(prev, finalPayload.ui_blocks!));
       }
-      const galleryItems = extractWindAnalysisGalleryItems(payload);
+      const galleryItems = extractWindAnalysisGalleryItems(finalPayload);
       if (galleryItems.length) {
         setBlocks((prev) => mergeBlocks(prev, [{ type: "gallery", title: "分析图", items: galleryItems }]));
       }
 
-      const spec = extractMapSpec(payload);
+      const spec = extractMapSpec(finalPayload);
       if (spec?.center) {
         setMapSpec(spec);
         setMapInfo(JSON.stringify(spec, null, 2));
@@ -547,7 +614,7 @@ export default function Page() {
 
   function normalizeResponseFromEndpoint(endpoint: string, payload: any, json: any): ChatResponse {
     if (endpoint === "/agent/chat") {
-      const summary = String(json?.summary || json?.answer || "");
+      const summary = extractPrimaryAnswer(json);
       const charts = Array.isArray(json?.analysis?.data?.charts) ? json.analysis.data.charts : [];
       const galleryItems = charts
         .map((item: any) => ({
@@ -573,11 +640,15 @@ export default function Page() {
     }
 
     const mapped: ChatResponse = { ...(json || {}) };
-    if (!Array.isArray(mapped.ui_blocks) && mapped.answer) {
-      mapped.ui_blocks = [{ type: "message", role: "assistant", content: String(mapped.answer) }];
+    const primaryAnswer = extractPrimaryAnswer(mapped);
+    if (!mapped.answer && primaryAnswer) {
+      mapped.answer = primaryAnswer;
+    }
+    if (!Array.isArray(mapped.ui_blocks) && primaryAnswer) {
+      mapped.ui_blocks = [{ type: "message", role: "assistant", content: primaryAnswer }];
     }
     if (!mapped.mode) mapped.mode = payload?.mode || "auto";
-    return mapped;
+    return applyTyphoonNarrative(mapped);
   }
 
   async function tryNonStreamEndpoints(payload: any, signal?: AbortSignal): Promise<{ endpoint: string; response: ChatResponse }> {
@@ -699,7 +770,7 @@ export default function Page() {
 
       setUiStatus(`流式接口不可用（HTTP ${res.status}），尝试非流式接口...`, "warn");
       const fallback = await tryNonStreamEndpoints(payload, controller.signal);
-      const json = fallback.response;
+      const json = applyTyphoonNarrative(fallback.response);
       const typhoonUiOnlyMap = mode === "typhoon_model";
       if (typhoonUiOnlyMap) {
         const summary = buildTyphoonMarkdownSummary(json);
@@ -855,15 +926,24 @@ export default function Page() {
   }
 
   useEffect(() => {
-    if (!mapSpec?.center) return;
+    if (!mapSpec?.center) {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+      mapLayersRef.current = [];
+      return;
+    }
     let cancelled = false;
 
     (async () => {
       const L = await import("leaflet");
       if (cancelled) return;
+      const container = mapContainerRef.current;
+      if (!container) return;
 
       if (!mapRef.current) {
-        mapRef.current = L.map("map");
+        mapRef.current = L.map(container);
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           maxZoom: 12,
           attribution: "&copy; OpenStreetMap",
@@ -1167,7 +1247,7 @@ export default function Page() {
             <article className="msg-row assistant-row">
               <div className="avatar">A</div>
               <div className="msg-card data-card">
-                <div id="map" />
+                <div id="map" ref={mapContainerRef} />
                 <pre className="mono slim">{mapInfo}</pre>
                 <div className="inline-actions">
                   <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={(e) => setCsvFile(e.target.files?.[0] || null)} />

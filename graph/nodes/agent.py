@@ -171,6 +171,21 @@ def _looks_like_typhoon_query(query: str) -> bool:
     return any(k in q for k in keywords)
 
 
+def _looks_like_wind_analysis_query(query: str) -> bool:
+    q = str(query or "").lower()
+    keywords = (
+        "wind analysis",
+        "wind condition",
+        "wind resource",
+        "weibull",
+        "风况",
+        "风资源",
+        "风速分布",
+        "风向",
+    )
+    return any(k in q for k in keywords)
+
+
 def _looks_like_map_query(query: str) -> bool:
     q = str(query or "").lower()
     keywords = ("map", "visual", "visualize", "geo", "leaflet", "地图", "可视化")
@@ -254,7 +269,10 @@ def _build_typhoon_tool_input(query: str, hint: dict[str, Any] | None) -> dict[s
     if "radius_km" not in payload:
         payload["radius_km"] = _extract_first_float(
             query,
-            [r"(?:R|radius|半径)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)", r"([-+]?\d+(?:\.\d+)?)\s*km"],
+            [
+                r"(?:R|radius(?:[_\-\s]*km)?|半径(?:[_\-\s]*km)?)\s*[:=]?\s*([-+]?\d+(?:\.\d+)?)",
+                r"([-+]?\d+(?:\.\d+)?)\s*km",
+            ],
         )
     if "wind_threshold_kt" not in payload:
         kt = _extract_first_float(query, [r"(30|50)\s*kt", r"(30|50)\s*节"])
@@ -671,6 +689,8 @@ def domain_router(state: AgentFlowState) -> AgentFlowState:
 
     if _looks_like_typhoon_query(query) or preferred_tool == "analyze_typhoon_probability":
         fallback_domain, fallback_confidence, fallback_candidates = "typhoon", 0.90, ["typhoon", "knowledge"]
+    elif _looks_like_wind_analysis_query(query):
+        fallback_domain, fallback_confidence, fallback_candidates = "wind_analysis", 0.85, ["wind_analysis", "knowledge"]
     elif file_paths:
         fallback_domain, fallback_confidence, fallback_candidates = "wind_analysis", 0.85, ["wind_analysis", "knowledge"]
     elif len(query) <= 1:
@@ -797,6 +817,10 @@ def mode_router(state: AgentFlowState) -> AgentFlowState:
 
     if domain == "knowledge" and mode not in {"query", "clarify"}:
         mode = "query"
+        confidence = max(confidence, 0.70)
+    if domain == "wind_analysis" and mode == "query":
+        # Wind-analysis requests should execute deterministic analysis tools instead of RAG query path.
+        mode = "create"
         confidence = max(confidence, 0.70)
     if domain == "typhoon" and mode != "clarify":
         # Typhoon requests should run deterministic workflow (probability + map) instead of single-tool path.

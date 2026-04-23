@@ -21,8 +21,6 @@ type UiBlock = {
 type ChatResponse = {
   ok?: boolean;
   mode?: string;
-  provider?: string;
-  model?: string;
   answer?: string;
   elapsed_seconds?: number;
   request_id?: string;
@@ -74,8 +72,6 @@ function parseSseChunk(chunk: string): SseEvent | null {
 function buildPayload(state: {
   sessionId: string;
   mode: string;
-  provider: string;
-  model: string;
   userPrompt: string;
   temperature: number;
   maxTokens: number;
@@ -101,13 +97,11 @@ function buildPayload(state: {
   tfMonths: string;
 }) {
   const ragEnabled = state.mode === "auto" || state.mode === "rag";
-  const typhoonModeEnabled = state.mode === "wind_agent" || state.mode === "typhoon_model";
+  const typhoonModeEnabled = state.mode === "typhoon_model";
 
   const payload: any = {
     session_id: state.sessionId || "session-anon",
     mode: state.mode,
-    provider: state.provider,
-    model: state.model.trim(),
     messages: [
       { role: "system", content: DEFAULT_SYSTEM_PROMPT },
       { role: "user", content: state.userPrompt.trim() },
@@ -143,8 +137,6 @@ function buildPayload(state: {
     };
   }
 
-  if (!payload.model) delete payload.model;
-
   if (state.typhoonEnabled && typhoonModeEnabled) {
     const months = String(state.tfMonths || "")
       .split(",")
@@ -165,6 +157,14 @@ function buildPayload(state: {
   }
 
   return payload;
+}
+
+function resolveScopedSessionId(baseSessionId: string, mode: string): string {
+  const base = String(baseSessionId || "session-anon").trim() || "session-anon";
+  const m = String(mode || "").trim().toLowerCase();
+  if (m === "wind_analysis") return `${base}:wind-analysis`;
+  if (m === "typhoon_model") return `${base}:typhoon-model`;
+  return `${base}:chat`;
 }
 
 function mergeBlocks(prev: UiBlock[], next: UiBlock[]) {
@@ -198,6 +198,15 @@ function toZhCaption(rawTitle: string): string {
   const key = extractFigureKey(rawTitle);
   if (key) return `图${key}`;
   return "图像";
+}
+
+function resolveGallerySrc(backendUrl: string, asset: string): string {
+  const raw = String(asset || "").trim();
+  if (!raw) return "";
+  if (/^(?:data:|https?:\/\/|file:\/\/)/i.test(raw)) return raw;
+  if (/^[A-Za-z]:[\\/]/.test(raw)) return `file:///${raw.replace(/\\/g, "/")}`;
+  if (raw.startsWith("/")) return `${trimSlash(backendUrl)}${raw}`;
+  return raw;
 }
 
 function extractMapSpec(payload: any): any | null {
@@ -253,6 +262,16 @@ function extractTyphoonProbabilityResult(payload: any): any | null {
   return null;
 }
 
+function extractWindAnalysisGalleryItems(payload: any): any[] {
+  const charts = Array.isArray(payload?.analysis?.data?.charts) ? payload.analysis.data.charts : [];
+  return charts
+    .map((item: any) => ({
+      title: String(item?.title || "analysis-chart"),
+      asset_url: String(item?.data_url || item?.path || ""),
+    }))
+    .filter((item: any) => !!item.asset_url);
+}
+
 function buildTyphoonMarkdownSummary(payload: any): string {
   const prob = extractTyphoonProbabilityResult(payload);
   if (!prob || typeof prob !== "object") return "台风分析已完成。";
@@ -288,9 +307,10 @@ function buildTyphoonMarkdownSummary(payload: any): string {
 export default function Page() {
   const [backendUrl, setBackendUrl] = useState(process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8787");
   const [mode, setMode] = useState("auto");
-  const [provider, setProvider] = useState("vllm");
-  const [model, setModel] = useState("");
   const [userPrompt, setUserPrompt] = useState("");
+  const [windAnalysisFilePath, setWindAnalysisFilePath] = useState("/share/home/lijiyao/CCCC/Wind-Agent/wind_data/wind condition @Akida.xlsx");
+  const [sidebarWidth, setSidebarWidth] = useState(340);
+  const [imagePreview, setImagePreview] = useState<{ src: string; title: string } | null>(null);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(768);
   const [topK, setTopK] = useState(4);
@@ -379,7 +399,7 @@ export default function Page() {
         return id === "save_result" || id === "copy_request_id";
       });
     });
-    const filteredBlocks = effectiveBlocks.filter((b) => b.type !== "actions" && !isVerboseBatchJsonBlock(b));
+    const filteredBlocks = effectiveBlocks.filter((b) => b.type !== "actions" && b.type !== "json" && !isVerboseBatchJsonBlock(b));
     const galleries = filteredBlocks.filter((b) => b.type === "gallery");
     const nonGallery = filteredBlocks.filter((b) => b.type !== "gallery");
     if (!galleries.length) return nonGallery;
@@ -489,6 +509,10 @@ export default function Page() {
       if (Array.isArray(payload?.ui_blocks) && payload.ui_blocks.length) {
         setBlocks((prev) => mergeBlocks(prev, payload.ui_blocks!));
       }
+      const galleryItems = extractWindAnalysisGalleryItems(payload);
+      if (galleryItems.length) {
+        setBlocks((prev) => mergeBlocks(prev, [{ type: "gallery", title: "分析图", items: galleryItems }]));
+      }
 
       const spec = extractMapSpec(payload);
       if (spec?.center) {
@@ -524,9 +548,16 @@ export default function Page() {
   function normalizeResponseFromEndpoint(endpoint: string, payload: any, json: any): ChatResponse {
     if (endpoint === "/agent/chat") {
       const summary = String(json?.summary || json?.answer || "");
+      const charts = Array.isArray(json?.analysis?.data?.charts) ? json.analysis.data.charts : [];
+      const galleryItems = charts
+        .map((item: any) => ({
+          title: String(item?.title || "analysis-chart"),
+          asset_url: String(item?.data_url || item?.path || ""),
+        }))
+        .filter((item: any) => !!item.asset_url);
       return {
         ok: json?.success !== false,
-        mode: "wind_agent",
+        mode: "wind_analysis",
         answer: summary,
         request_id: json?.request_id,
         analysis: json?.analysis,
@@ -535,6 +566,7 @@ export default function Page() {
           ? json.ui_blocks
           : [
               { type: "message", role: "assistant", content: summary || "Agent finished." },
+              ...(galleryItems.length ? [{ type: "gallery", title: "分析图", items: galleryItems }] : []),
               { type: "json", title: "Analysis", data: json?.analysis || {} },
             ],
       };
@@ -602,12 +634,19 @@ export default function Page() {
       return;
     }
 
+    let effectivePrompt = userPrompt;
+    if (mode === "wind_analysis" && windAnalysisFilePath.trim()) {
+      const p = windAnalysisFilePath.trim();
+      if (!effectivePrompt.includes(p)) {
+        effectivePrompt = `${effectivePrompt.trim()}\n\n风况分析输入文件：${p}`.trim();
+      }
+    }
+
+    const scopedSessionId = resolveScopedSessionId(sessionId, mode);
     const payload = buildPayload({
-      sessionId,
+      sessionId: scopedSessionId,
       mode,
-      provider,
-      model,
-      userPrompt,
+      userPrompt: effectivePrompt,
       temperature,
       maxTokens,
       topK,
@@ -678,7 +717,10 @@ export default function Page() {
         }
       } else {
         setResponse(json);
-        setBlocks(Array.isArray(json?.ui_blocks) ? json.ui_blocks : []);
+        const baseBlocks = Array.isArray(json?.ui_blocks) ? json.ui_blocks : [];
+        const galleryItems = extractWindAnalysisGalleryItems(json);
+        const appended = galleryItems.length ? mergeBlocks(baseBlocks, [{ type: "gallery", title: "分析图", items: galleryItems }]) : baseBlocks;
+        setBlocks(appended);
       }
       const spec = extractMapSpec(json);
       if (spec?.center) {
@@ -765,6 +807,35 @@ export default function Page() {
   function clearMap() {
     setMapSpec(null);
     setMapInfo("无地图数据。");
+  }
+
+  async function downloadImage(src: string, title: string) {
+    const safeName = (title || "image").replace(/[\\/:*?"<>|]+/g, "_");
+    if (!src) return;
+    if (/^data:/i.test(src)) {
+      const a = document.createElement("a");
+      a.href = src;
+      a.download = `${safeName}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+    try {
+      const resp = await fetch(src);
+      if (!resp.ok) throw new Error(`download failed: ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeName}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      window.open(src, "_blank", "noopener,noreferrer");
+    }
   }
 
   function saveResult() {
@@ -866,7 +937,10 @@ export default function Page() {
 
   return (
     <div className="chat-page">
-      <main className={`chat-shell ${showSettings ? "with-sidebar" : "sidebar-collapsed"}`}>
+      <main
+        className={`chat-shell ${showSettings ? "with-sidebar" : "sidebar-collapsed"}`}
+        style={{ ["--sidebar-width" as any]: `${sidebarWidth}px` }}
+      >
         <div className="chat-layout">
           <button
             className={`sidebar-open-btn ${showSettings ? "hidden" : ""}`}
@@ -895,13 +969,26 @@ export default function Page() {
                   <div className="settings-block">
                     <div className="settings-title">基础</div>
                     <div className="field-grid two">
-                      <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">auto</option><option value="rag">rag</option><option value="wind_agent">wind_agent</option><option value="typhoon_model">typhoon_model</option><option value="llm_direct">llm_direct</option></select></div>
-                      <div><label>provider</label><input value={provider} onChange={(e) => setProvider(e.target.value)} /></div>
-                      <div><label>model</label><input value={model} onChange={(e) => setModel(e.target.value)} /></div>
+                      <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">自动路由</option><option value="wind_analysis">风况分析</option><option value="typhoon_model">台风预测</option><option value="llm_direct">大模型问答</option><option value="rag">RAG</option></select></div>
                       <div><label>后端地址</label><input value={backendUrl} onChange={(e) => setBackendUrl(e.target.value)} /></div>
                       <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
                       <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
                       <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
+                    </div>
+                  </div>
+
+                  <div className="settings-block">
+                    <div className="settings-title">布局</div>
+                    <div>
+                      <label>设置栏宽度（{sidebarWidth}px）</label>
+                      <input
+                        type="range"
+                        min={280}
+                        max={520}
+                        step={10}
+                        value={sidebarWidth}
+                        onChange={(e) => setSidebarWidth(Number(e.target.value))}
+                      />
                     </div>
                   </div>
 
@@ -953,6 +1040,30 @@ export default function Page() {
                         </button>
                       ) : null}
                     </div>
+                    <div>
+                      <label>风况分析输入文件</label>
+                      <div className="inline-actions">
+                        <button
+                          className="ghost-btn"
+                          onClick={() => {
+                            if (!windAnalysisFilePath.trim()) return;
+                            setUserPrompt((prev) => {
+                              const text = (prev || "").trim();
+                              const line = `风况分析输入文件：${windAnalysisFilePath.trim()}`;
+                              if (text.includes(windAnalysisFilePath.trim())) return text;
+                              return `${text}\n${line}`.trim();
+                            });
+                          }}
+                        >
+                          插入到输入框
+                        </button>
+                        <input
+                          value={windAnalysisFilePath}
+                          onChange={(e) => setWindAnalysisFilePath(e.target.value)}
+                          placeholder="输入风况分析 Excel 路径"
+                        />
+                      </div>
+                    </div>
                     <div className={`status-chip ${statusKind}`}>{status}</div>
                     <pre className="mono slim">{runtimeText === "{}" ? '{\n  "client_time": "--",\n  "elapsed_seconds": "--",\n  "mode": "--"\n}' : runtimeText}</pre>
                     {healthInfo && showHealthDetails ? (
@@ -967,7 +1078,7 @@ export default function Page() {
           <section className="chat-main">
             <section className="chat-header">
               <div>
-                <h1>中交智慧风电智能体</h1>
+                <h1>中交智慧风电智能体平台</h1>
                 <p className="subtle">面向风电知识问答、RAG 检索与台风分析</p>
               </div>
             </section>
@@ -976,7 +1087,7 @@ export default function Page() {
           {!hasResultSection ? (
             <div className="empty-state card-lite">
               <div className="empty-title">今天想分析什么？</div>
-              <div className="empty-subtitle">支持 RAG 问答、wind_agent、typhoon_model 与地图结果展示</div>
+              <div className="empty-subtitle">支持风况分析、台风预测、大模型问答、RAG 与地图结果展示</div>
             </div>
           ) : null}
 
@@ -1026,7 +1137,7 @@ export default function Page() {
                   {b.type === "gallery" ? (
                     <div className="gallery gallery-chat">
                       {(Array.isArray(b.items) ? b.items : []).map((it: any, idx: number) => {
-                        const src = trimSlash(backendUrl) + String(it?.asset_url || "");
+                        const src = resolveGallerySrc(backendUrl, String(it?.asset_url || it?.src || ""));
                         const indices = Array.isArray(it?.indices)
                           ? it.indices.map((x: any) => String(x || "").trim()).filter(Boolean)
                           : [];
@@ -1035,8 +1146,12 @@ export default function Page() {
                         return (
                           <div key={`${i}-g-${idx}`} className="gallery-card">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={src} alt={titleText} />
+                            <img src={src} alt={titleText} onClick={() => setImagePreview({ src, title: titleText })} />
                             <div className="gallery-title">{`${indexLabel}${titleText}`}</div>
+                            <div className="gallery-actions">
+                              <button className="ghost-btn" onClick={() => setImagePreview({ src, title: titleText })}>放大</button>
+                              <button className="ghost-btn" onClick={() => void downloadImage(src, titleText)}>下载</button>
+                            </div>
                           </div>
                         );
                       })}
@@ -1089,6 +1204,21 @@ export default function Page() {
           </section>
         </div>
       </main>
+      {imagePreview ? (
+        <div className="image-modal" onClick={() => setImagePreview(null)}>
+          <div className="image-modal-inner" onClick={(e) => e.stopPropagation()}>
+            <div className="image-modal-top">
+              <div className="image-modal-title">{imagePreview.title}</div>
+              <div className="inline-actions">
+                <button className="ghost-btn" onClick={() => void downloadImage(imagePreview.src, imagePreview.title)}>下载</button>
+                <button className="ghost-btn" onClick={() => setImagePreview(null)}>关闭</button>
+              </div>
+            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imagePreview.src} alt={imagePreview.title} className="image-modal-img" />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -47,7 +47,6 @@ function renderText(v: any) {
 export default function V1Page() {
   const [backendUrl, setBackendUrl] = useState(process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8787");
   const [mode, setMode] = useState("auto");
-  const [model, setModel] = useState("");
   const [topK, setTopK] = useState(4);
   const [temperature, setTemperature] = useState(0.2);
   const [maxTokens, setMaxTokens] = useState(768);
@@ -61,8 +60,6 @@ export default function V1Page() {
   const payload = useMemo(
     () => ({
       mode,
-      provider: "vllm",
-      ...(model.trim() ? { model: model.trim() } : {}),
       messages: [
         { role: "system", content: DEFAULT_SYSTEM_PROMPT },
         { role: "user", content: userPrompt.trim() },
@@ -85,7 +82,7 @@ export default function V1Page() {
         max_subquestions: 3,
       },
     }),
-    [mode, model, userPrompt, temperature, maxTokens, topK],
+    [mode, userPrompt, temperature, maxTokens, topK],
   );
 
   async function send() {
@@ -184,15 +181,12 @@ export default function V1Page() {
           <div>
             <label>Mode</label>
             <select value={mode} onChange={(e) => setMode(e.target.value)}>
-              <option value="auto">auto</option>
-              <option value="rag">rag</option>
-              <option value="wind_agent">wind_agent</option>
-              <option value="llm_direct">llm_direct</option>
+              <option value="auto">自动路由</option>
+              <option value="wind_analysis">风况分析</option>
+              <option value="typhoon_model">台风预测</option>
+              <option value="llm_direct">大模型问答</option>
+              <option value="rag">RAG</option>
             </select>
-          </div>
-          <div>
-            <label>Model (optional)</label>
-            <input value={model} onChange={(e) => setModel(e.target.value)} />
           </div>
         </div>
 

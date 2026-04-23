@@ -17,7 +17,7 @@ def test_only_rag_and_llm_direct_are_upscaled(monkeypatch):
 
     assert _resolve_final_answer_max_tokens("rag", 512, runtime) == 4096
     assert _resolve_final_answer_max_tokens("llm_direct", 1024, runtime) == 4096
-    assert _resolve_final_answer_max_tokens("wind_agent", 768, runtime) == 768
+    assert _resolve_final_answer_max_tokens("wind_analysis", 768, runtime) == 768
     assert _resolve_final_answer_max_tokens("typhoon_model", 900, runtime) == 900
 
 

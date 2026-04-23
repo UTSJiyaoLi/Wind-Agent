@@ -46,8 +46,8 @@ button, input, textarea, select {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 340px;
-  min-width: 340px;
+  width: var(--sidebar-width, 340px);
+  min-width: 280px;
   overflow: hidden;
   border-right: 1px solid var(--line);
   background: #232323;
@@ -130,7 +130,7 @@ button, input, textarea, select {
 .chat-shell.with-sidebar .chat-main > .chat-header,
 .chat-shell.with-sidebar .chat-main > .chat-body,
 .chat-shell.with-sidebar .chat-main > .composer-wrap {
-  transform: translateX(min(170px, max(0px, calc((100vw - 980px) / 2))));
+  transform: translateX(min(calc(var(--sidebar-width, 340px) / 2), max(0px, calc((100vw - 980px) / 2))));
 }
 
 .chat-header {
@@ -328,6 +328,61 @@ button, input, textarea, select {
   object-fit: contain;
   border-radius: 16px;
   background: #111;
+  cursor: zoom-in;
+}
+
+.gallery-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gallery-actions .ghost-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.image-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.image-modal-inner {
+  width: min(1200px, 96vw);
+  max-height: 94vh;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #1c1c1c;
+  padding: 12px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.image-modal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.image-modal-title {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.image-modal-img {
+  width: 100%;
+  max-height: calc(94vh - 84px);
+  object-fit: contain;
+  border-radius: 12px;
+  background: #111;
 }
 
 #map {
@@ -466,6 +521,24 @@ textarea {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
 }
 
+.composer-tools {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.composer-tools input {
+  border-radius: 999px;
+  height: 40px;
+}
+
+input[type="range"] {
+  padding: 0;
+  background: transparent;
+}
+
 .composer-input {
   min-height: 52px;
   max-height: 220px;
@@ -515,7 +588,8 @@ textarea {
   }
 
   .settings-sidebar {
-    width: min(84vw, 340px);
+    width: min(84vw, var(--sidebar-width, 340px));
+    min-width: 0;
     box-shadow: 10px 0 30px rgba(0, 0, 0, 0.25);
   }
 

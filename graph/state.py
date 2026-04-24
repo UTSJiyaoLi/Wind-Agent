@@ -58,6 +58,7 @@ class AgentFlowState(TypedDict, total=False):
     trace: List[Dict[str, Any]]
     error: str
     llm_config: Dict[str, Any]
+    planner_llm_config: Dict[str, Any]
 
 
 TraceDetails = Optional[Dict[str, Any]]

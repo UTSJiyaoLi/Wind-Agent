@@ -8,6 +8,7 @@ A lightweight Next.js Chat UI launcher for connecting to a remote backend throug
 
 - Frontend project: `apps/web`
 - Unified launcher: `wind_agent_chatui.cmd`
+- Remote deployment reference: `REMOTE_NODE_SERVICE_MAP.md`
 
 ### Prerequisites
 
@@ -41,27 +42,34 @@ The script will:
 
 - Keep tunnel window open while using the UI.
 - If ports conflict, change `UI_PORT` / `LOCAL_PORT`.
+- Current remote model split:
+  - `8001 / Qwen3-VL-8B-Instruct`: `llm_direct` and `rag`
+  - `8003 / Llama-3.1-8B-Instruct`: planner only
+- Current deployment policy:
+  - Reuse existing tmux sessions and service ports
+  - Do not create extra Wind-Agent service instances during restart
 
 ---
 
 ## 中文说明
 
-这个仓库用于启动 Next.js 前端, 通过 SSH 隧道连接远程后端。
+这个仓库用于启动 Next.js 前端，通过 SSH 隧道连接远程后端。
 
 ### 仓库内容
 
 - 前端工程: `apps/web`
 - 统一启动脚本: `wind_agent_chatui.cmd`
+- 远端部署说明: `REMOTE_NODE_SERVICE_MAP.md`
 
 ### 运行前准备
 
-- Windows 系统, 支持 cmd 或 PowerShell
+- Windows 系统，支持 `cmd` 或 PowerShell
 - 已安装 Node.js (`npm.cmd` 在 PATH 中)
-- 已安装 OpenSSH 或 plink
+- 已安装 OpenSSH 或 `plink`
 
 ### 启动方式
 
-可以双击脚本, 也可以命令行运行:
+可以双击脚本，也可以命令行运行:
 
 ```bat
 C:\wind-agent\wind_agent_chatui.cmd
@@ -69,9 +77,9 @@ C:\wind-agent\wind_agent_chatui.cmd
 
 脚本会自动执行:
 
-1. 建立 SSH 隧道 (如果未设置 `SKIP_TUNNEL=1`)
+1. 建立 SSH 隧道（如果未设置 `SKIP_TUNNEL=1`）
 2. 启动 Next.js 前端
-3. 只打开一次浏览器页面
+3. 打开浏览器页面
 
 ### 常用环境变量
 
@@ -79,9 +87,19 @@ C:\wind-agent\wind_agent_chatui.cmd
 - `LOCAL_PORT` (默认 `8787`)
 - `REMOTE_HOST` (默认 `127.0.0.1`)
 - `REMOTE_PORT` (默认 `8787`)
-- `SKIP_TUNNEL=1`: 跳过隧道, 仅启动前端
+- `SKIP_TUNNEL=1`: 跳过隧道，仅启动前端
+
+### 当前远端模型分工
+
+- `8001 / Qwen3-VL-8B-Instruct`: `llm_direct` 和 `rag`
+- `8003 / Llama-3.1-8B-Instruct`: 仅负责 planner
+
+### 当前发布约束
+
+- 复用现有 tmux 会话和既有端口
+- 重启时不要额外新开 Wind-Agent 服务实例
 
 ### 说明
 
 - 使用过程中请保持隧道窗口不要关闭。
-- 如果端口冲突, 请修改 `UI_PORT` 或 `LOCAL_PORT`。
+- 如果端口冲突，请修改 `UI_PORT` 或 `LOCAL_PORT`。

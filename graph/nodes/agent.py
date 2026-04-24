@@ -323,6 +323,21 @@ def _default_llm_config() -> dict[str, Any]:
     }
 
 
+def _default_planner_llm_config() -> dict[str, Any]:
+    return {
+        "base_url": os.getenv(
+            "PLANNER_LLM_BASE_URL",
+            os.getenv("ORCH_LLM_BASE_URL", os.getenv("VLLM_BASE_URL", "http://127.0.0.1:8001")),
+        ),
+        "model": os.getenv("PLANNER_LLM_MODEL", os.getenv("ORCH_LLM_MODEL", os.getenv("VLLM_MODEL", ""))),
+        "api_key": os.getenv(
+            "PLANNER_LLM_API_KEY",
+            os.getenv("ORCH_LLM_API_KEY", os.getenv("VLLM_API_KEY", "EMPTY")),
+        ),
+        "timeout_seconds": int(os.getenv("PLANNER_LLM_TIMEOUT", os.getenv("ORCH_LLM_TIMEOUT", "60"))),
+    }
+
+
 def _resolve_llm_max_tokens(state: AgentFlowState, default_value: int) -> int:
     cfg = state.get("llm_config") or {}
     try:
@@ -369,6 +384,25 @@ def _call_orchestrator_llm(
         return ""
     content = (choices[0].get("message") or {}).get("content", "")
     return str(content).strip()
+
+
+def _call_planner_llm(
+    state: AgentFlowState,
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.1,
+    max_tokens: int = 256,
+) -> str:
+    planner_state: AgentFlowState = dict(state)
+    planner_cfg = dict(_default_planner_llm_config())
+    planner_cfg.update(state.get("planner_llm_config") or {})
+    planner_state["llm_config"] = planner_cfg
+    return _call_orchestrator_llm(
+        planner_state,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
 
 def _run_rag_query(state: AgentFlowState, query: str) -> dict[str, Any]:
@@ -1049,7 +1083,7 @@ def workflow_planner(state: AgentFlowState) -> AgentFlowState:
             ensure_ascii=False,
         )
         try:
-            raw = _call_orchestrator_llm(
+            raw = _call_planner_llm(
                 next_state,
                 messages=[
                     {"role": "system", "content": prompt},

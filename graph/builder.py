@@ -98,6 +98,7 @@ def run_wind_agent_flow(
     excel_path_hint: Optional[str] = None,
     tool_input_hint: Optional[Dict[str, Any]] = None,
     llm_config: Optional[Dict[str, Any]] = None,
+    planner_llm_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     app = build_wind_agent_graph()
     request_id = uuid4().hex
@@ -112,6 +113,8 @@ def run_wind_agent_flow(
         state["tool_input_hint"] = dict(tool_input_hint)
     if llm_config:
         state["llm_config"] = dict(llm_config)
+    if planner_llm_config:
+        state["planner_llm_config"] = dict(planner_llm_config)
 
     result = app.invoke(state)
 

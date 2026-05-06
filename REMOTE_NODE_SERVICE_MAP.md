@@ -1,6 +1,6 @@
 ﻿# 远端 CPU/GPU 节点服务清单
 
-更新时间：2026-04-24 09:30 (Asia/Shanghai)
+更新时间：2026-04-24 12:05 (Asia/Shanghai)
 采集方式：`ssh -J lijiyao@172.30.3.166 lijiyao@gpu6000` + `tmux ls` + `tmux list-panes` + `curl /health` + 本地 `Get-NetTCPConnection/Win32_Process`。
 
 ## 1) gpu6000 当前会话
@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | `fish-yolo` | 鱼病 YOLO 服务 | `apptainer/yolo_fastapi.sif` -> `uvicorn :8000` |
 | `vllm` | Fish VLM/LLM 推理 | `vllm.sif` -> `vllm serve :8001` |
-| `fish-retrieval` | Fish 检索服务 | `apptainer/inforhub.sif` -> `uvicorn :8002` |
+| `fish-retrieval` | Fish 检索服务 | `apptainer/milvus.sif` -> `uvicorn :8002`（当前以 `numpy_fallback` 模式运行） |
 | `wind-vllm-orch` | Wind Orchestrator vLLM | `vllm.sif` -> `vllm serve :8003` |
 | `fish-fdapp` | Fish 聚合应用 | `apptainer/yolo_vllm.sif` -> `uvicorn :8004` |
 | `wind-agent-api` | Wind-Agent FastAPI | `inforhub.sif` + bind -> `uvicorn :8005` |
@@ -25,8 +25,13 @@
 - 已按现有可用镜像原地重启鱼病相关 tmux 会话：
   - `fish-yolo` -> `/share/home/lijiyao/CCCC/apptainer/yolo_fastapi.sif`
   - `fish-fdapp` -> `/share/home/lijiyao/CCCC/apptainer/yolo_vllm.sif`
-  - `fish-retrieval` -> `/share/home/lijiyao/CCCC/apptainer/inforhub.sif`
-- 原 `wind-agent-offline_20260403.sif` 当前不可用，`fish-retrieval` 已改由 `inforhub.sif` 顶替。
+  - `fish-retrieval` -> `/share/home/lijiyao/CCCC/apptainer/milvus.sif`
+- 原 `wind-agent-offline_20260403.sif` 当前不可用，已先后尝试 `inforhub.sif` 与新增上传的 `milvus.sif` 作为 `fish-retrieval` 替代镜像。
+- 已确认旧路径痕迹只剩 shell history：`/share/home/lijiyao/CCCC/apptainer/wind-agent-offline_20260403.sif`，服务器当前未找到该镜像本体或归档副本。
+- 鱼病服务当前健康状态：
+  - `fish-yolo` (`8000`)：健康检查通过
+  - `fish-fdapp` (`8004`)：健康检查通过
+  - `fish-retrieval` (`8002`)：健康检查通过；当前强制使用 `RETRIEVAL_BACKEND=numpy_fallback`，直接从 `embeddings.npy + chunks.jsonl` 提供检索
 
 ## 2) gpu6000 端口快照
 
@@ -34,7 +39,7 @@
 | --- | --- | --- | --- |
 | 8000 | 0.0.0.0 | `uvicorn` | fish yolo app |
 | 8001 | 0.0.0.0 | `vllm` | Qwen3-VL-8B-Instruct (`llm_direct` / `rag`) |
-| 8002 | 0.0.0.0 | `python` | fish retrieval app |
+| 8002 | 0.0.0.0 | `uvicorn` | fish retrieval app (`numpy_fallback`) |
 | 8003 | 0.0.0.0 | `vllm` | Llama-3.1-8B-Instruct (`planner`) |
 | 8004 | 0.0.0.0 | `uvicorn` | fish fd_app |
 | 8005 | 0.0.0.0 | `python` | Wind-Agent API |

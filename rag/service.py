@@ -7,9 +7,11 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from uuid import uuid4
 from typing import Any, Callable, Optional
 from urllib.parse import quote
+from uuid import uuid4
+
+from storage import CHAT_SESSION_STORE
 
 
 _WIND_DOMAIN_KEYWORDS = {
@@ -42,9 +44,138 @@ def _last_user_message(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _build_rag_user_prompt(user_query: str, context_blob: str, media_blob: str) -> str:
+def _sanitize_messages(messages: list[dict[str, Any]], max_count: int = 14) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        if role not in {"system", "user", "assistant"}:
+            continue
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    if not normalized:
+        return []
+    if normalized[0]["role"] == "system":
+        remainder = normalized[1:]
+        return [normalized[0], *remainder[-max(0, max_count - 1) :]]
+    return normalized[-max(1, max_count) :]
+
+
+def _needs_conversation_context(query: str) -> bool:
+    q = str(query or "").strip().lower()
+    if not q:
+        return False
+    if len(q) <= 6:
+        return True
+    followup_tokens = (
+        "继续",
+        "刚才",
+        "上一个",
+        "上一轮",
+        "前面",
+        "上述",
+        "这个",
+        "那个",
+        "它",
+        "改成",
+        "再来",
+        "补充",
+        "细化",
+        "按照刚才",
+    )
+    return any(token in q for token in followup_tokens)
+
+
+def _merge_session_messages(session_id: str, messages: list[dict[str, Any]], max_count: int = 14) -> list[dict[str, str]]:
+    incoming = _sanitize_messages(messages, max_count=max_count)
+    if len(incoming) > 2:
+        return incoming
+
+    recent = _sanitize_messages(CHAT_SESSION_STORE.get_recent_messages(session_id, limit=max_count - 1), max_count=max_count - 1)
+    if not incoming:
+        return recent
+
+    system_messages = [msg for msg in incoming if msg["role"] == "system"]
+    non_system = [msg for msg in incoming if msg["role"] != "system"]
+    if not recent:
+        return [*system_messages[:1], *non_system]
+
+    merged: list[dict[str, str]] = []
+    if system_messages:
+        merged.append(system_messages[0])
+    merged.extend(recent[-max(0, max_count - len(merged) - len(non_system)) :])
+    merged.extend(non_system)
+    return _sanitize_messages(merged, max_count=max_count)
+
+
+def _build_conversation_context(memory: dict[str, Any], recent_messages: list[dict[str, Any]]) -> str:
+    summary = str(memory.get("summary") or "").strip()
+    open_questions = list(memory.get("open_questions") or [])
+    snippets: list[str] = []
+    for msg in recent_messages[-4:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        content = str(msg.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        prefix = "用户" if role == "user" else "助手"
+        snippets.append(f"{prefix}: {content[:140]}")
+    parts = []
+    if summary:
+        parts.append(f"会话摘要:\n{summary}")
+    if open_questions:
+        parts.append("待确认事项:\n" + "\n".join(f"- {str(item)[:160]}" for item in open_questions[:3]))
+    if snippets:
+        parts.append("最近对话:\n" + "\n".join(snippets))
+    return "\n\n".join(parts).strip()
+
+
+def _augment_query_with_memory(query: str, memory: dict[str, Any]) -> str:
+    text = str(query or "").strip()
+    summary = str(memory.get("summary") or "").strip()
+    if not text or not summary or not _needs_conversation_context(text):
+        return text
+    return f"{text}\n\n[会话摘要]\n{summary}"
+
+
+def _merge_tool_input_hint(current_hint: dict[str, Any] | None, memory: dict[str, Any]) -> dict[str, Any] | None:
+    merged = dict(memory.get("slots") or {})
+    if isinstance(current_hint, dict):
+        for key, value in current_hint.items():
+            if value is None:
+                continue
+            merged[key] = value
+    return merged or None
+
+
+def _record_session_turn(
+    *,
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+    mode: str,
+    tool_input: dict[str, Any] | None = None,
+) -> None:
+    if not str(user_message or "").strip() or not str(assistant_message or "").strip():
+        return
+    CHAT_SESSION_STORE.record_turn(
+        session_id=session_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        mode=mode,
+        tool_input=tool_input,
+    )
+
+
+def _build_rag_user_prompt(user_query: str, context_blob: str, media_blob: str, conversation_blob: str = "") -> str:
+    conversation_section = f"会话上下文:\n{conversation_blob}\n\n" if conversation_blob else ""
     return (
         f"用户问题:\n{user_query}\n\n"
+        f"{conversation_section}"
         f"检索上下文:\n{context_blob}\n\n"
         f"图表与公式线索:\n{media_blob}\n\n"
         "请严格基于上下文回答。每个关键结论后加引用标签（如 [CTX1]）。"
@@ -695,6 +826,12 @@ def handle_chat_request(
         mode = "wind_agent"
     provider = req.get("provider", "vllm")
     messages = req.get("messages") or []
+    session_memory = CHAT_SESSION_STORE.get_memory(session_id)
+    messages = _merge_session_messages(session_id, messages)
+    conversation_blob = _build_conversation_context(
+        session_memory,
+        [msg for msg in messages if str(msg.get("role") or "") != "system"],
+    )
     generation_cfg = req.get("generation_config") or {}
     requested_max_tokens = int(generation_cfg.get("max_tokens", runtime.args.llm_max_tokens))
     retrieval_cfg = req.get("retrieval_config") or {}
@@ -727,7 +864,11 @@ def handle_chat_request(
                 raise RuntimeError("wind_agent mode unavailable: cannot import run_wind_agent_flow")
             if not user_content:
                 raise ValueError("No user message found for wind_agent query.")
-            agent_input_hint = req.get("wind_agent_input") if isinstance(req.get("wind_agent_input"), dict) else None
+            agent_input_hint = _merge_tool_input_hint(
+                req.get("wind_agent_input") if isinstance(req.get("wind_agent_input"), dict) else None,
+                session_memory,
+            )
+            agent_query = _augment_query_with_memory(user_content, session_memory)
             orch_cfg = {
                 "base_url": str(generation_cfg.get("base_url") or getattr(runtime.args, "llm_base_url", "")),
                 "model": str(req.get("model") or getattr(runtime.args, "llm_model", "")),
@@ -744,10 +885,13 @@ def handle_chat_request(
                     or getattr(runtime.args, "orchestrator_timeout_seconds", 60)
                 ),
             }
-            with tracer.span(request_id, "wind_agent", metadata={"query_summary": tracer.summarize_text(user_content)}) as agent_span:
+            with tracer.span(request_id, "wind_agent", metadata={"query_summary": tracer.summarize_text(agent_query)}) as agent_span:
                 agent_result = run_wind_agent_flow(
-                    user_content,
+                    agent_query,
                     tool_input_hint=agent_input_hint,
+                    session_id=session_id,
+                    memory_summary=str(session_memory.get("summary") or ""),
+                    chat_history=[msg for msg in messages if str(msg.get("role") or "") != "system"],
                     llm_config=orch_cfg,
                     planner_llm_config=planner_cfg,
                 )
@@ -768,12 +912,20 @@ def handle_chat_request(
                         analysis = dict(analysis)
                         analysis["map_spec"] = _ms
                         break
+            answer_text = str(agent_result.get("summary") or "Agent finished.")
+            _record_session_turn(
+                session_id=session_id,
+                user_message=user_content,
+                assistant_message=answer_text,
+                mode=mode,
+                tool_input=agent_input_hint,
+            )
             return 200, {
                 "ok": True,
                 "mode": mode,
                 "provider": provider,
                 "model": selected_tool,
-                "answer": agent_result.get("summary") or "Agent finished.",
+                "answer": answer_text,
                 "analysis": analysis,
                 "workflow_results": workflow_results,
                 "trace": agent_result.get("trace", []),
@@ -790,7 +942,7 @@ def handle_chat_request(
                 "session_id": session_id,
                 "ui_blocks": _build_ui_blocks(
                     mode=mode,
-                    answer=agent_result.get("summary") or "Agent finished.",
+                    answer=answer_text,
                     request_id=request_id,
                     session_id=session_id,
                     preview_images=preview_images,
@@ -824,6 +976,12 @@ def handle_chat_request(
                     timeout_seconds=runtime.args.llm_timeout_seconds,
                 )
                 gen_span.add({"answer_chars": len(str(answer or ""))})
+            _record_session_turn(
+                session_id=session_id,
+                user_message=user_content,
+                assistant_message=answer,
+                mode=mode,
+            )
             return 200, {
                 "ok": True,
                 "mode": mode,
@@ -843,6 +1001,7 @@ def handle_chat_request(
         if mode == "rag":
             if not user_content:
                 raise ValueError("No user message found for RAG query.")
+            effective_user_content = _augment_query_with_memory(user_content, session_memory)
             decomposition = {"enabled": bool(agentic_cfg.get("decompose_enabled")), "triggered": False, "subquestions": []}
 
             def run_single_query(q_text: str) -> dict[str, Any]:
@@ -1007,6 +1166,12 @@ def handle_chat_request(
                     for x in sub_payloads
                 ]
                 tracer.event(request_id, "agentic_step", metadata={"step": "grade_answer", "decomposed": True, "grounding": agentic_grades.get("grounding")})
+                _record_session_turn(
+                    session_id=session_id,
+                    user_message=user_content,
+                    assistant_message=answer,
+                    mode=mode,
+                )
                 return 200, {
                     "ok": True,
                     "mode": mode,
@@ -1038,7 +1203,7 @@ def handle_chat_request(
                     ),
                 }
 
-            retr_result = run_single_query(user_content)
+            retr_result = run_single_query(effective_user_content)
             contexts = retr_result["contexts"]
             prompt_contexts = retr_result["prompt_contexts"]
             retrieval_metrics = retr_result["retrieval_metrics"]
@@ -1089,7 +1254,7 @@ def handle_chat_request(
             media_blob = summarize_media_for_prompt(prompt_contexts)
             rag_messages = [
                 {"role": "system", "content": runtime.args.system_prompt},
-                {"role": "user", "content": _build_rag_user_prompt(user_content, context_blob, media_blob)},
+                {"role": "user", "content": _build_rag_user_prompt(user_content, context_blob, media_blob, conversation_blob)},
             ]
             with tracer.span(request_id, "generate_rag_answer", metadata={"model": model}) as gen_span:
                 answer = call_vllm_chat(
@@ -1131,6 +1296,12 @@ def handle_chat_request(
             )
             citations, preview_images = _filter_outputs_by_answer_refs(answer, citations, preview_images)
             answer = f"{answer}\n\n请按以下 CTX 映射核对出处：\n{render_citation_index(citations)}"
+            _record_session_turn(
+                session_id=session_id,
+                user_message=user_content,
+                assistant_message=answer,
+                mode=mode,
+            )
             return 200, {
                 "ok": True,
                 "mode": mode,

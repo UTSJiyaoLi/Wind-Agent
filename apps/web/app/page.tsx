@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { Layer, Map as LeafletMap } from "leaflet";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,6 +28,14 @@ type ChatResponse = {
   analysis?: Record<string, any>;
   retrieval_metrics?: Record<string, any>;
   [k: string]: any;
+};
+
+type ChatTurn = {
+  sessionId: string;
+  mode: string;
+  question: string;
+  answer: string;
+  timestamp: string;
 };
 
 type StatusKind = "ok" | "warn" | "err";
@@ -82,10 +90,25 @@ function parseSseChunk(chunk: string): SseEvent | null {
   }
 }
 
+function buildConversationMessages(historyTurns: ChatTurn[], currentPrompt: string) {
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: DEFAULT_SYSTEM_PROMPT },
+  ];
+  for (const turn of historyTurns.slice(-6)) {
+    const question = String(turn.question || "").trim();
+    const answer = String(turn.answer || "").trim();
+    if (question) messages.push({ role: "user", content: question });
+    if (answer) messages.push({ role: "assistant", content: answer });
+  }
+  messages.push({ role: "user", content: currentPrompt.trim() });
+  return messages;
+}
+
 function buildPayload(state: {
   sessionId: string;
   mode: string;
   userPrompt: string;
+  conversationMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   temperature: number;
   maxTokens: number;
   topK: number;
@@ -115,10 +138,7 @@ function buildPayload(state: {
   const payload: any = {
     session_id: state.sessionId || "session-anon",
     mode: state.mode,
-    messages: [
-      { role: "system", content: DEFAULT_SYSTEM_PROMPT },
-      { role: "user", content: state.userPrompt.trim() },
-    ],
+    messages: state.conversationMessages,
     generation_config: {
       temperature: Number(state.temperature || 0.2),
       max_tokens: Number(state.maxTokens || 768),
@@ -174,10 +194,7 @@ function buildPayload(state: {
 
 function resolveScopedSessionId(baseSessionId: string, mode: string): string {
   const base = String(baseSessionId || "session-anon").trim() || "session-anon";
-  const m = String(mode || "").trim().toLowerCase();
-  if (m === "wind_analysis") return `${base}:wind-analysis`;
-  if (m === "typhoon_model") return `${base}:typhoon-model`;
-  return `${base}:chat`;
+  return base;
 }
 
 function mergeBlocks(prev: UiBlock[], next: UiBlock[]) {
@@ -400,6 +417,7 @@ export default function Page() {
 
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [lastQuestion, setLastQuestion] = useState("");
+  const [historyTurns, setHistoryTurns] = useState<ChatTurn[]>([]);
   const [response, setResponse] = useState<ChatResponse | null>(null);
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [rawText, setRawText] = useState("{}");
@@ -414,11 +432,24 @@ export default function Page() {
   const mapRef = useRef<LeafletMap | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapLayersRef = useRef<Layer[]>([]);
+  const chatBodyRef = useRef<HTMLElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const pendingQuestionRef = useRef("");
+  const streamBufferRef = useRef("");
+  const streamFlushFrameRef = useRef<number | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const sidebarDragRef = useRef<{ dragging: boolean; startX: number; startWidth: number }>({
+    dragging: false,
+    startX: 0,
+    startWidth: 340,
+  });
 
-  const hasResultSection = useMemo(() => !!response || !!streamedAnswer || blocks.length > 0 || !!lastQuestion, [response, streamedAnswer, blocks, lastQuestion]);
+  const hasResultSection = useMemo(
+    () => !!response || !!streamedAnswer || blocks.length > 0 || !!lastQuestion || historyTurns.length > 0,
+    [response, streamedAnswer, blocks, lastQuestion, historyTurns.length],
+  );
 
   useEffect(() => {
     const key = "wind_agent_session_id";
@@ -434,8 +465,34 @@ export default function Page() {
     }
     setSessionId(value);
   }, []);
+
+  useEffect(() => {
+    const key = "wind_agent_sidebar_width";
+    try {
+      const raw = window.localStorage.getItem(key) || "";
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        setSidebarWidth(Math.min(520, Math.max(300, parsed)));
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("wind_agent_sidebar_width", String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth]);
   const hasMapSection = useMemo(() => !!mapSpec, [mapSpec]);
   const sideBlockTypes = useMemo(() => new Set(["agentic_trace_timeline", "metrics", "meta", "agentic_grades"]), []);
+  const activeScopedSessionId = useMemo(() => resolveScopedSessionId(sessionId, mode), [sessionId, mode]);
+  const sessionHistoryTurns = useMemo(
+    () => historyTurns.filter((turn) => turn.sessionId === activeScopedSessionId),
+    [historyTurns, activeScopedSessionId],
+  );
+  const visibleHistoryTurns = useMemo(
+    () => (response ? sessionHistoryTurns.slice(0, -1) : sessionHistoryTurns),
+    [response, sessionHistoryTurns],
+  );
 
   const structuralBlocks = useMemo(() => {
     const merged = [...blocks];
@@ -470,6 +527,40 @@ export default function Page() {
     setStatusKind(kind);
   }
 
+  function flushStreamBuffer() {
+    if (!streamBufferRef.current) return;
+    const chunk = streamBufferRef.current;
+    streamBufferRef.current = "";
+    setStreamedAnswer((prev) => prev + chunk);
+  }
+
+  function scheduleStreamFlush() {
+    if (streamFlushFrameRef.current !== null) return;
+    streamFlushFrameRef.current = window.requestAnimationFrame(() => {
+      streamFlushFrameRef.current = null;
+      flushStreamBuffer();
+    });
+  }
+
+  function appendHistoryTurn(question: string, answer: string, scopedSessionId: string, currentMode: string) {
+    const q = String(question || "").trim();
+    const a = String(answer || "").trim();
+    if (!q || !a) return;
+    setHistoryTurns((prev) => [
+      ...prev,
+      {
+        sessionId: scopedSessionId,
+        mode: currentMode,
+        question: q,
+        answer: a,
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+    setStreamedAnswer("");
+    pendingQuestionRef.current = "";
+    streamBufferRef.current = "";
+  }
+
   function resetRuntimePanels() {
     setStreamedAnswer("");
     setResponse(null);
@@ -478,6 +569,11 @@ export default function Page() {
     setRuntimeText("{}");
     setMapSpec(null);
     setMapInfo("无地图数据。");
+    streamBufferRef.current = "";
+    if (streamFlushFrameRef.current !== null) {
+      window.cancelAnimationFrame(streamFlushFrameRef.current);
+      streamFlushFrameRef.current = null;
+    }
   }
 
   function onSseEvent(evt: SseEvent) {
@@ -486,7 +582,10 @@ export default function Page() {
     if (evt.event === "token") {
       if (typhoonUiOnlyMap) return;
       const token = String(evt.data?.text || "");
-      if (token) setStreamedAnswer((prev) => prev + token);
+      if (token) {
+        streamBufferRef.current += token;
+        scheduleStreamFlush();
+      }
       return;
     }
 
@@ -519,6 +618,7 @@ export default function Page() {
     }
 
     if (evt.event === "done") {
+      flushStreamBuffer();
       const payload = evt.data as ChatResponse;
       if (typhoonUiOnlyMap) {
         const summary = buildTyphoonMarkdownSummary(payload);
@@ -535,6 +635,7 @@ export default function Page() {
         setStreamedAnswer("");
         setResponse(patched);
         setBlocks([{ type: "message", role: "assistant", content: summary }]);
+        appendHistoryTurn(pendingQuestionRef.current, summary, activeScopedSessionId, mode);
         setRawText(JSON.stringify(patched, null, 2));
         setRuntimeText(
           JSON.stringify(
@@ -586,6 +687,7 @@ export default function Page() {
         setMapSpec(spec);
         setMapInfo(JSON.stringify(spec, null, 2));
       }
+      appendHistoryTurn(pendingQuestionRef.current, extractPrimaryAnswer(finalPayload), activeScopedSessionId, mode);
       setUiStatus("请求成功。", "ok");
     }
   }
@@ -714,10 +816,12 @@ export default function Page() {
     }
 
     const scopedSessionId = resolveScopedSessionId(sessionId, mode);
+    const conversationMessages = buildConversationMessages(sessionHistoryTurns, effectivePrompt);
     const payload = buildPayload({
       sessionId: scopedSessionId,
       mode,
       userPrompt: effectivePrompt,
+      conversationMessages,
       temperature,
       maxTokens,
       topK,
@@ -749,8 +853,10 @@ export default function Page() {
     }
 
     setLastQuestion(q);
+    pendingQuestionRef.current = q;
     setUserPrompt("");
     resetRuntimePanels();
+    shouldStickToBottomRef.current = true;
     setIsLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -782,6 +888,7 @@ export default function Page() {
         };
         setResponse(patched);
         setBlocks([{ type: "message", role: "assistant", content: summary }]);
+        appendHistoryTurn(q, summary, scopedSessionId, mode);
         if (spec?.center) {
           setMapSpec(spec);
           setMapInfo(JSON.stringify(spec, null, 2));
@@ -792,6 +899,7 @@ export default function Page() {
         const galleryItems = extractWindAnalysisGalleryItems(json);
         const appended = galleryItems.length ? mergeBlocks(baseBlocks, [{ type: "gallery", title: "分析图", items: galleryItems }]) : baseBlocks;
         setBlocks(appended);
+        appendHistoryTurn(q, extractPrimaryAnswer(json), scopedSessionId, mode);
       }
       const spec = extractMapSpec(json);
       if (spec?.center) {
@@ -991,18 +1099,43 @@ export default function Page() {
   }, [mapSpec, tfLat, tfLon]);
 
   useEffect(() => {
+    const container = chatBodyRef.current;
+    if (!container) return;
+    const el = container;
+
+    function onScroll() {
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldStickToBottomRef.current = distanceToBottom < 120;
+    }
+
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    const container = chatBodyRef.current;
+    if (!container || !shouldStickToBottomRef.current) return;
+    const el = container;
+    const frame = window.requestAnimationFrame(() => {
+      void el;
+      chatEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayBlocks, streamedAnswer]);
+
+  useEffect(() => {
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
       mapLayersRef.current = [];
+      if (streamFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(streamFlushFrameRef.current);
+      }
     };
   }, []);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [displayBlocks, streamedAnswer, status]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -1014,6 +1147,41 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    function onPointerMove(e: PointerEvent) {
+      const drag = sidebarDragRef.current;
+      if (!drag.dragging) return;
+      const nextWidth = drag.startWidth + (e.clientX - drag.startX);
+      setSidebarWidth(Math.min(520, Math.max(300, nextWidth)));
+    }
+
+    function stopDragging() {
+      sidebarDragRef.current.dragging = false;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    };
+  }, []);
+
+  function startSidebarResize(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    sidebarDragRef.current = {
+      dragging: true,
+      startX: e.clientX,
+      startWidth: sidebarWidth,
+    };
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+  }
 
   return (
     <div className="chat-page">
@@ -1032,6 +1200,13 @@ export default function Page() {
           </button>
 
           <aside className="settings-sidebar" aria-hidden={!showSettings}>
+            <div
+              className="settings-sidebar-resizer"
+              onPointerDown={startSidebarResize}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整设置栏宽度"
+            />
             <div className="settings-sidebar-inner">
               <div className="sidebar-top">
                 <button
@@ -1045,110 +1220,111 @@ export default function Page() {
                 <span className="sidebar-top-title">设置</span>
               </div>
               <section className="settings-drawer card-lite">
+                <div className="settings-intro">
+                  <div className="settings-intro-title">会话控制台</div>
+                  <div className="settings-intro-text">把常用模式、检索参数和业务输入集中在左侧，主页面保持专注阅读与对话。</div>
+                </div>
                 <div className="settings-grid">
-                  <div className="settings-block">
-                    <div className="settings-title">基础</div>
-                    <div className="field-grid two">
-                      <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">自动路由</option><option value="wind_analysis">风况分析</option><option value="typhoon_model">台风预测</option><option value="llm_direct">大模型问答</option><option value="rag">RAG</option></select></div>
-                      <div><label>后端地址</label><input value={backendUrl} onChange={(e) => setBackendUrl(e.target.value)} /></div>
-                      <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
-                      <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
-                      <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
-                    </div>
-                  </div>
-
-                  <div className="settings-block">
-                    <div className="settings-title">布局</div>
-                    <div>
-                      <label>设置栏宽度（{sidebarWidth}px）</label>
-                      <input
-                        type="range"
-                        min={280}
-                        max={520}
-                        step={10}
-                        value={sidebarWidth}
-                        onChange={(e) => setSidebarWidth(Number(e.target.value))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="settings-block">
-                    <div className="settings-title">RAG</div>
-                    <div className="check-grid">
-                      <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
-                      <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
-                      <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
-                    </div>
-                    <div className="field-grid three">
-                      <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
-                      <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
-                      <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
-                      <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
-                      <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
-                      <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
-                    </div>
-                  </div>
-
-                  <div className="settings-block">
-                    <div className="settings-title">台风参数</div>
-                    <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
-                    <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
+                  <div className="settings-section">
+                    <div className="settings-section-title">会话与模型</div>
+                    <div className="settings-section-caption">控制当前模式、后端入口和生成参数。</div>
+                    <div className="settings-block">
+                      <div className="settings-title">基础</div>
                       <div className="field-grid two">
-                        <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
-                        <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
+                        <div><label>模式</label><select value={mode} onChange={(e) => setMode(e.target.value)}><option value="auto">自动路由</option><option value="wind_analysis">风况分析</option><option value="typhoon_model">台风预测</option><option value="llm_direct">大模型问答</option><option value="rag">RAG</option></select></div>
+                        <div><label>后端地址</label><input value={backendUrl} onChange={(e) => setBackendUrl(e.target.value)} /></div>
+                        <div><label>temperature</label><input type="number" step="0.1" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} /></div>
+                        <div><label>max_tokens</label><input type="number" value={maxTokens} onChange={(e) => setMaxTokens(Number(e.target.value))} /></div>
+                        <div><label>top_k</label><input type="number" value={topK} onChange={(e) => setTopK(Number(e.target.value))} /></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-section">
+                    <div className="settings-section-title">检索与业务参数</div>
+                    <div className="settings-section-caption">RAG 检索质量控制和台风业务参数放在一起，减少来回跳找。</div>
+                    <div className="settings-block">
+                      <div className="settings-title">RAG</div>
+                      <div className="check-grid">
+                        <label><input type="checkbox" checked={ragRewrite} onChange={(e) => setRagRewrite(e.target.checked)} /> rewrite</label>
+                        <label><input type="checkbox" checked={ragExpand} onChange={(e) => setRagExpand(e.target.checked)} /> expand</label>
+                        <label><input type="checkbox" checked={ragRerank} onChange={(e) => setRagRerank(e.target.checked)} /> rerank</label>
                       </div>
                       <div className="field-grid three">
-                        <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
-                        <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
-                        <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
-                        <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
-                        <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
-                        <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
+                        <div><label>coarse_k</label><input type="number" value={ragCoarseK} onChange={(e) => setRagCoarseK(Number(e.target.value))} /></div>
+                        <div><label>bm25_k</label><input type="number" value={ragBm25K} onChange={(e) => setRagBm25K(Number(e.target.value))} /></div>
+                        <div><label>merge_k</label><input type="number" value={ragMergeK} onChange={(e) => setRagMergeK(Number(e.target.value))} /></div>
+                        <div><label>dedup_doc_k</label><input type="number" value={ragDedupDocK} onChange={(e) => setRagDedupDocK(Number(e.target.value))} /></div>
+                        <div><label>doc_top_m</label><input type="number" value={ragDocTopM} onChange={(e) => setRagDocTopM(Number(e.target.value))} /></div>
+                        <div><label>max_candidates</label><input type="number" value={ragMaxCandidates} onChange={(e) => setRagMaxCandidates(Number(e.target.value))} /></div>
                       </div>
-                      <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
-                    </fieldset>
+                    </div>
+
+                    <div className="settings-block">
+                      <div className="settings-title">台风参数</div>
+                      <label className="toggle-line"><input type="checkbox" checked={typhoonEnabled} onChange={(e) => setTyphoonEnabled(e.target.checked)} /> 启用 wind_agent_input</label>
+                      <fieldset disabled={!typhoonEnabled} className="fieldset-reset">
+                        <div className="field-grid two">
+                          <div><label>model_scope</label><select value={tfModelScope} onChange={(e) => setTfModelScope(e.target.value)}><option value="scs">scs</option><option value="total">total</option></select></div>
+                          <div><label>wind_threshold_kt</label><input type="number" value={tfWindThreshold} onChange={(e) => setTfWindThreshold(Number(e.target.value))} /></div>
+                        </div>
+                        <div className="field-grid three">
+                          <div><label>lat</label><input type="number" value={tfLat} onChange={(e) => setTfLat(Number(e.target.value))} /></div>
+                          <div><label>lon</label><input type="number" value={tfLon} onChange={(e) => setTfLon(Number(e.target.value))} /></div>
+                          <div><label>radius_km</label><input type="number" value={tfRadius} onChange={(e) => setTfRadius(Number(e.target.value))} /></div>
+                          <div><label>year_start</label><input type="number" value={tfYearStart} onChange={(e) => setTfYearStart(Number(e.target.value))} /></div>
+                          <div><label>year_end</label><input type="number" value={tfYearEnd} onChange={(e) => setTfYearEnd(Number(e.target.value))} /></div>
+                          <div><label>n_boundary</label><input type="number" value={tfBoundary} onChange={(e) => setTfBoundary(Number(e.target.value))} /></div>
+                        </div>
+                        <div><label>months</label><input value={tfMonths} onChange={(e) => setTfMonths(e.target.value)} /></div>
+                      </fieldset>
+                    </div>
                   </div>
 
-                  <div className="settings-block">
-                    <div className="settings-title">工具</div>
-                    <div className="inline-actions">
-                      <button className="ghost-btn" onClick={checkHealth}>健康检查</button>
-                      <button className="ghost-btn" onClick={saveResult}>下载结果</button>
-                      {healthInfo ? (
-                        <button className="ghost-btn" onClick={() => setShowHealthDetails((v) => !v)}>
-                          {showHealthDetails ? "隐藏详细信息" : "详细信息"}
-                        </button>
+                  <div className="settings-section">
+                    <div className="settings-section-title">运行状态</div>
+                    <div className="settings-section-caption">把健康检查、文件注入和运行状态放在一起，便于排查。</div>
+                    <div className="settings-block settings-block-accent">
+                      <div className="settings-title">运行与工具</div>
+                      <div className="inline-actions">
+                        <button className="ghost-btn" onClick={checkHealth}>健康检查</button>
+                        <button className="ghost-btn" onClick={saveResult}>下载结果</button>
+                        {healthInfo ? (
+                          <button className="ghost-btn" onClick={() => setShowHealthDetails((v) => !v)}>
+                            {showHealthDetails ? "隐藏详细信息" : "详细信息"}
+                          </button>
+                        ) : null}
+                      </div>
+                      <div>
+                        <label>风况分析输入文件</label>
+                        <div className="inline-actions">
+                          <button
+                            className="ghost-btn"
+                            onClick={() => {
+                              if (!windAnalysisFilePath.trim()) return;
+                              setUserPrompt((prev) => {
+                                const text = (prev || "").trim();
+                                const line = `风况分析输入文件：${windAnalysisFilePath.trim()}`;
+                                if (text.includes(windAnalysisFilePath.trim())) return text;
+                                return `${text}\n${line}`.trim();
+                              });
+                            }}
+                          >
+                            插入到输入框
+                          </button>
+                          <input
+                            value={windAnalysisFilePath}
+                            onChange={(e) => setWindAnalysisFilePath(e.target.value)}
+                            placeholder="输入风况分析 Excel 路径"
+                          />
+                        </div>
+                      </div>
+                      <div className={`status-chip ${statusKind}`}>{status}</div>
+                      <pre className="mono slim">{runtimeText === "{}" ? '{\n  "client_time": "--",\n  "elapsed_seconds": "--",\n  "mode": "--"\n}' : runtimeText}</pre>
+                      {healthInfo && showHealthDetails ? (
+                        <pre className="mono slim health-details">{JSON.stringify(healthInfo, null, 2)}</pre>
                       ) : null}
                     </div>
-                    <div>
-                      <label>风况分析输入文件</label>
-                      <div className="inline-actions">
-                        <button
-                          className="ghost-btn"
-                          onClick={() => {
-                            if (!windAnalysisFilePath.trim()) return;
-                            setUserPrompt((prev) => {
-                              const text = (prev || "").trim();
-                              const line = `风况分析输入文件：${windAnalysisFilePath.trim()}`;
-                              if (text.includes(windAnalysisFilePath.trim())) return text;
-                              return `${text}\n${line}`.trim();
-                            });
-                          }}
-                        >
-                          插入到输入框
-                        </button>
-                        <input
-                          value={windAnalysisFilePath}
-                          onChange={(e) => setWindAnalysisFilePath(e.target.value)}
-                          placeholder="输入风况分析 Excel 路径"
-                        />
-                      </div>
-                    </div>
-                    <div className={`status-chip ${statusKind}`}>{status}</div>
-                    <pre className="mono slim">{runtimeText === "{}" ? '{\n  "client_time": "--",\n  "elapsed_seconds": "--",\n  "mode": "--"\n}' : runtimeText}</pre>
-                    {healthInfo && showHealthDetails ? (
-                      <pre className="mono slim health-details">{JSON.stringify(healthInfo, null, 2)}</pre>
-                    ) : null}
                   </div>
                 </div>
               </section>
@@ -1163,13 +1339,34 @@ export default function Page() {
               </div>
             </section>
 
-            <section className="chat-body">
+            <section className="chat-body" ref={chatBodyRef}>
           {!hasResultSection ? (
             <div className="empty-state card-lite">
               <div className="empty-title">今天想分析什么？</div>
               <div className="empty-subtitle">支持风况分析、台风预测、大模型问答、RAG 与地图结果展示</div>
             </div>
           ) : null}
+
+          {visibleHistoryTurns.map((turn, idx) => (
+            <div key={`${turn.sessionId}-${turn.timestamp}-${idx}`}>
+              <article className="msg-row assistant-row">
+                <div className="avatar">Q</div>
+                <div className="msg-card markdown-message">
+                  <div className="markdown-body plain-markdown">{turn.question}</div>
+                </div>
+              </article>
+              <article className="msg-row assistant-row">
+                <div className="avatar">A</div>
+                <div className="msg-card markdown-message">
+                  <div className="markdown-body plain-markdown">
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {turn.answer}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              </article>
+            </div>
+          ))}
 
           {!!lastQuestion ? (
             <article className="msg-row assistant-row">

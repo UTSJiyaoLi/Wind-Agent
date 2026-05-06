@@ -16,6 +16,8 @@ class AgentFlowState(TypedDict, total=False):
     request_id: str
     user_query: str
     session_id: str
+    memory_summary: str
+    chat_history: List[Dict[str, Any]]
     file_path: Optional[str]
     file_paths: List[str]
     data_folder: Optional[str]

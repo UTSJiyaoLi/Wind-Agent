@@ -97,6 +97,9 @@ def run_wind_agent_flow(
     request: str,
     excel_path_hint: Optional[str] = None,
     tool_input_hint: Optional[Dict[str, Any]] = None,
+    session_id: str = "default",
+    memory_summary: str = "",
+    chat_history: Optional[list[dict[str, Any]]] = None,
     llm_config: Optional[Dict[str, Any]] = None,
     planner_llm_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -105,8 +108,12 @@ def run_wind_agent_flow(
     state: AgentFlowState = {
         "request_id": request_id,
         "user_query": request,
-        "session_id": "default",
+        "session_id": str(session_id or "default"),
     }
+    if memory_summary:
+        state["memory_summary"] = str(memory_summary)
+    if chat_history:
+        state["chat_history"] = list(chat_history)
     if excel_path_hint:
         state["file_path"] = excel_path_hint
     if tool_input_hint:
